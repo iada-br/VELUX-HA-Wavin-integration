@@ -1,0 +1,44 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Wavin AHC 9000",
+        "description": "Configure the connection to the AHC 9000 controller via a USR-TCP232 (or compatible) transparent RS-485 to TCP bridge.",
+        "data": {
+          "host": "Host / IP Address",
+          "port": "TCP Port",
+          "slave_id": "RS-485 Slave ID",
+          "num_channels": "Number of Zones",
+          "scan_interval": "Poll Interval (seconds)"
+        },
+        "data_description": {
+          "host": "IP address or hostname of the RS-485 bridge (e.g. 10.10.100.254).",
+          "port": "TCP port on the USR-TCP232 gateway. Default is 8899 (Modbus TCP gateway mode).",
+          "slave_id": "Modbus slave address of the AHC 9000. Usually 1.",
+          "num_channels": "Number of underfloor heating zones wired to the controller (1–10).",
+          "scan_interval": "How often to read register values from the controller (10–300 seconds)."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to the device. Check the host, port, and that the bridge is reachable on the network.",
+      "unknown": "Unexpected error — check the Home Assistant logs for details."
+    },
+    "abort": {
+      "already_configured": "This device is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Wavin AHC 9000 Options",
+        "data": {
+          "scan_interval": "Poll Interval (seconds)"
+        },
+        "data_description": {
+          "scan_interval": "How often to read register values from the controller (10–300 seconds)."
+        }
+      }
+    }
+  }
+}
