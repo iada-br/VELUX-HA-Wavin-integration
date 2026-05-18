@@ -137,7 +137,7 @@ Fires a `wavin_ahc9000_channel_info` event on the HA event bus with a snapshot o
 
 ```yaml
 service: wavin_ahc9000.get_channel_info
-data: {}
+data: {} #todo: show a success example
 ```
 
 The resulting event payload contains the full flat-dict from the coordinator (see [Data Coordinator](#data-coordinator)).
@@ -153,7 +153,7 @@ Implemented in `config_flow.py`. Two-step UI wizard:
 | Host | `10.10.100.254` | IP address of USR gateway |
 | Port | `8899` | TCP port on gateway |
 | Slave ID | `1` | Modbus slave address of AHC 9000 |
-| Number of zones | `4` | How many zones to poll (1–10) |
+| Number of zones | `4` | How many zones to poll (1–16) |
 | Poll interval | `30 s` | How often to read all zones |
 
 A live connection test is made before saving; if it fails, the user sees an error and can correct the settings.
