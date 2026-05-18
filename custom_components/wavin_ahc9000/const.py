@@ -72,6 +72,14 @@ KEY_VALVE_OPEN  = "valve_open"
 KEY_TP_LOST     = "tp_lost"
 
 
+# ── Channel naming ────────────────────────────────────────────────────────────
+CONF_CHANNEL_NAMES = "channel_names"
+
+# ── Service names ─────────────────────────────────────────────────────────────
+SERVICE_SET_TEMPERATURE = "set_temperature"
+SERVICE_GET_CHANNEL_INFO = "get_channel_info"
+
+
 def ch_key(channel: int, key: str) -> str:
     """Return the flat-dict key for a per-channel value.
 
@@ -80,3 +88,8 @@ def ch_key(channel: int, key: str) -> str:
         ch_key(2, KEY_FLOOR_TEMP) → 'ch2_floor_temp'
     """
     return f"ch{channel}_{key}"
+
+
+def channel_display_name(options: dict, channel: int) -> str:
+    """Return the user-configured name for a channel (0-based), falling back to 'Zone N'."""
+    return options.get(CONF_CHANNEL_NAMES, {}).get(str(channel), f"Zone {channel + 1}")

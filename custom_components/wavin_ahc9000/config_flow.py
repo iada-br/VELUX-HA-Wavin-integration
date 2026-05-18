@@ -13,6 +13,7 @@ from homeassistant.data_entry_flow import FlowResult
 
 from .client import CannotConnect, WavinClient
 from .const import (
+    CONF_CHANNEL_NAMES,
     CONF_NUM_CHANNELS,
     CONF_SCAN_INTERVAL,
     CONF_SLAVE_ID,
@@ -22,6 +23,7 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SLAVE_ID,
     DOMAIN,
+    channel_display_name,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -94,7 +96,6 @@ class WavinConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 )
                 errors["base"] = "unknown"
             else:
-                # Prevent duplicate entries for the same physical device.
                 await self.async_set_unique_id(
                     f"{user_input[CONF_HOST]}:{user_input[CONF_PORT]}"
                 )
@@ -116,26 +117,64 @@ class WavinConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class WavinOptionsFlow(config_entries.OptionsFlow):
-    """Options flow to adjust poll interval without re-adding the integration."""
+    """
+    Two-step options flow.
+
+    Step 1 (init):          Poll interval.
+    Step 2 (channel_names): User-assigned name for each heating zone.
+    """
 
     def __init__(self, entry: config_entries.ConfigEntry) -> None:
         self._entry = entry
+        self._pending: dict[str, Any] = {}
+
+    # ── Step 1: poll interval ─────────────────────────────────────────────────
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
+            self._pending = user_input
+            return await self.async_step_channel_names()
 
         current = self._entry.options.get(
             CONF_SCAN_INTERVAL,
             self._entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
         )
-        schema = vol.Schema(
-            {
-                vol.Required(CONF_SCAN_INTERVAL, default=current): vol.All(
-                    vol.Coerce(int), vol.Range(min=10, max=300)
-                ),
-            }
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_SCAN_INTERVAL, default=current): vol.All(
+                        vol.Coerce(int), vol.Range(min=10, max=300)
+                    ),
+                }
+            ),
         )
-        return self.async_show_form(step_id="init", data_schema=schema)
+
+    # ── Step 2: zone names ────────────────────────────────────────────────────
+
+    async def async_step_channel_names(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        num_channels: int = self._entry.data[CONF_NUM_CHANNELS]
+
+        if user_input is not None:
+            names = {
+                str(ch): user_input.get(f"zone_{ch + 1}_name", f"Zone {ch + 1}")
+                for ch in range(num_channels)
+            }
+            return self.async_create_entry(
+                title="",
+                data={**self._pending, CONF_CHANNEL_NAMES: names},
+            )
+
+        schema_fields: dict = {}
+        for ch in range(num_channels):
+            default = channel_display_name(self._entry.options, ch)
+            schema_fields[vol.Optional(f"zone_{ch + 1}_name", default=default)] = str
+
+        return self.async_show_form(
+            step_id="channel_names",
+            data_schema=vol.Schema(schema_fields),
+        )
