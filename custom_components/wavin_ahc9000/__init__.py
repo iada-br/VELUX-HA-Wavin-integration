@@ -11,6 +11,7 @@ from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, Supp
 from homeassistant.helpers import config_validation as cv
 
 from .const import (
+    CONF_ACTIVE_CHANNELS,
     CONF_CHANNEL_NAMES,
     DOMAIN,
     KEY_AIR_TEMP,
@@ -33,7 +34,7 @@ PLATFORMS: list[Platform] = [Platform.CLIMATE, Platform.SENSOR, Platform.BINARY_
 _SET_TEMPERATURE_SCHEMA = vol.Schema(
     {
         vol.Optional("zone_name"): cv.string,
-        vol.Optional("channel"): vol.All(vol.Coerce(int), vol.Range(min=0, max=9)),
+        vol.Optional("channel"): vol.All(vol.Coerce(int), vol.Range(min=0, max=15)),
         vol.Required("temperature"): vol.All(
             vol.Coerce(float), vol.Range(min=MIN_TEMP, max=MAX_TEMP)
         ),
@@ -107,11 +108,11 @@ def _register_services(hass: HomeAssistant) -> None:
                 continue
 
             if zone_name is not None:
-                for ch in range(coordinator.num_channels):
+                for ch in coordinator.active_channels:
                     if channel_display_name(entry.options, ch).lower() == zone_name.lower():
                         await coordinator.async_set_temperature(ch, temperature)
                         return
-            elif channel_idx is not None and channel_idx < coordinator.num_channels:
+            elif channel_idx is not None and channel_idx in coordinator.active_channels:
                 await coordinator.async_set_temperature(channel_idx, temperature)
                 return
 
@@ -148,7 +149,7 @@ def _register_services(hass: HomeAssistant) -> None:
             if entry is None:
                 continue
             data = coordinator.data or {}
-            for ch in range(coordinator.num_channels):
+            for ch in coordinator.active_channels:
                 zones.append(
                     {
                         "channel": ch,

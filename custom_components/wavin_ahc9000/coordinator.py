@@ -18,7 +18,7 @@ from .const import (
     CAT_ELEMENTS,
     CAT_PACKED,
     CAT_CHANNELS,
-    CONF_NUM_CHANNELS,
+    CONF_ACTIVE_CHANNELS,
     CONF_SCAN_INTERVAL,
     CONF_SLAVE_ID,
     DEFAULT_SCAN_INTERVAL,
@@ -67,7 +67,7 @@ class WavinCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self._entry = entry
-        self.num_channels: int = entry.data[CONF_NUM_CHANNELS]
+        self.active_channels: list[int] = entry.data[CONF_ACTIVE_CHANNELS]
         self.client = WavinClient(
             host=entry.data[CONF_HOST],
             port=entry.data[CONF_PORT],
@@ -120,7 +120,7 @@ class WavinCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.client.ensure_connected()
         data: dict[str, Any] = {}
 
-        for ch in range(self.num_channels):
+        for ch in self.active_channels:
             # ── Primary element pointer ────────────────────────────────────
             prim = self.client.read_registers(
                 CAT_CHANNELS, IDX_CH_PRIMARY_ELEMENT, page=ch, qty=1

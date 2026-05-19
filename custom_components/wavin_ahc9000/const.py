@@ -5,7 +5,7 @@ DOMAIN = "wavin_ahc9000"
 # ── Config entry keys ────────────────────────────────────────────────────────
 # CONF_HOST and CONF_PORT are imported from homeassistant.const.
 CONF_SLAVE_ID = "slave_id"
-CONF_NUM_CHANNELS = "num_channels"
+CONF_ACTIVE_CHANNELS = "active_channels"  # list[int] of channel indices with a wired thermostat
 CONF_SCAN_INTERVAL = "scan_interval"
 
 # ── Defaults ─────────────────────────────────────────────────────────────────
@@ -13,8 +13,8 @@ DEFAULT_HOST = "10.10.100.254"
 # USR-TCP232 Modbus TCP gateway port (confirmed by live device test).
 DEFAULT_PORT = 8899
 DEFAULT_SLAVE_ID = 0x01
-DEFAULT_NUM_CHANNELS = 4
 DEFAULT_SCAN_INTERVAL = 30  # seconds
+MAX_CHANNELS = 16  # physical maximum on the AHC 9000 AC-116
 
 # ── Protocol function codes ───────────────────────────────────────────────────
 FC_READ = 0x43   # Read by Index  (custom Wavin extension)
@@ -70,6 +70,7 @@ KEY_FLOOR_TEMP  = "floor_temp"
 KEY_DESIRED_TEMP = "desired_temp"
 KEY_VALVE_OPEN  = "valve_open"
 KEY_TP_LOST     = "tp_lost"
+KEY_CONFIGURED  = "configured"  # True when a thermostat is physically wired (element_idx > 0)
 
 
 # ── Channel naming ────────────────────────────────────────────────────────────

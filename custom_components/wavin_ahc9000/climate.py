@@ -40,7 +40,7 @@ async def async_setup_entry(
     coordinator: WavinCoordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities(
         WavinClimate(coordinator, entry, ch)
-        for ch in range(coordinator.num_channels)
+        for ch in coordinator.active_channels
     )
 
 

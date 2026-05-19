@@ -37,7 +37,7 @@ async def async_setup_entry(
     coordinator: WavinCoordinator = hass.data[DOMAIN][entry.entry_id]
     entities: list[SensorEntity] = []
 
-    for ch in range(coordinator.num_channels):
+    for ch in coordinator.active_channels:
         entities.append(
             WavinTemperatureSensor(
                 coordinator, entry, ch, KEY_AIR_TEMP, "Air Temperature", enabled=True

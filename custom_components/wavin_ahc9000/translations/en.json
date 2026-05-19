@@ -8,16 +8,18 @@
           "host": "Host / IP Address",
           "port": "TCP Port",
           "slave_id": "RS-485 Slave ID",
-          "num_channels": "Number of Rooms",
           "scan_interval": "Poll Interval (seconds)"
         },
         "data_description": {
           "host": "IP address or hostname of the RS-485 bridge (e.g. 10.10.100.254).",
           "port": "TCP port on the USR-TCP232 gateway. Default is 8899 (Modbus TCP gateway mode).",
           "slave_id": "Modbus slave address of the AHC 9000. Usually 1.",
-          "num_channels": "Number of rooms wired to the controller (1–16).",
           "scan_interval": "How often to read register values from the controller (10–300 seconds)."
         }
+      },
+      "confirm": {
+        "title": "Detected Zones",
+        "description": "The controller was scanned automatically.\n\n{zones_summary}\n\nPress Submit to finish setup."
       }
     },
     "error": {
