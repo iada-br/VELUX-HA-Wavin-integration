@@ -14,14 +14,12 @@ from .const import (
     CONF_ACTIVE_CHANNELS,
     CONF_CHANNEL_NAMES,
     DOMAIN,
-    KEY_AIR_TEMP,
     KEY_DESIRED_TEMP,
-    KEY_TP_LOST,
     KEY_VALVE_OPEN,
     MAX_TEMP,
     MIN_TEMP,
     SERVICE_GET_CHANNEL_INFO,
-    SERVICE_SET_TEMPERATURE,
+    SERVICE_SET_VALVE,
     channel_display_name,
     ch_key,
 )
@@ -29,15 +27,13 @@ from .coordinator import WavinCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.CLIMATE, Platform.SENSOR, Platform.BINARY_SENSOR]
+PLATFORMS: list[Platform] = [Platform.SWITCH]
 
-_SET_TEMPERATURE_SCHEMA = vol.Schema(
+_SET_VALVE_SCHEMA = vol.Schema(
     {
         vol.Optional("zone_name"): cv.string,
         vol.Optional("channel"): vol.All(vol.Coerce(int), vol.Range(min=0, max=15)),
-        vol.Required("temperature"): vol.All(
-            vol.Coerce(float), vol.Range(min=MIN_TEMP, max=MAX_TEMP)
-        ),
+        vol.Required("open"): cv.boolean,
     }
 )
 
@@ -59,7 +55,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
     # Register services once for the whole domain (guard against multiple entries).
-    if not hass.services.has_service(DOMAIN, SERVICE_SET_TEMPERATURE):
+    if not hass.services.has_service(DOMAIN, SERVICE_SET_VALVE):
         _register_services(hass)
 
     return True
@@ -79,7 +75,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Remove services only when the last entry is gone.
     if not hass.data.get(DOMAIN):
-        hass.services.async_remove(DOMAIN, SERVICE_SET_TEMPERATURE)
+        hass.services.async_remove(DOMAIN, SERVICE_SET_VALVE)
         hass.services.async_remove(DOMAIN, SERVICE_GET_CHANNEL_INFO)
 
     return unload_ok
@@ -90,17 +86,17 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 def _register_services(hass: HomeAssistant) -> None:
     """Register domain-level services. Called once when the first entry loads."""
 
-    async def _handle_set_temperature(call: ServiceCall) -> None:
+    async def _handle_set_valve(call: ServiceCall) -> None:
         """
-        Set the target temperature of a zone.
+        Open or close a zone valve.
 
         Identification priority: zone_name (case-insensitive) > channel index.
-        Searches all loaded Wavin entries so the caller does not need to know
-        which config entry owns the zone.
+        open=true  → setpoint MAX (forces valve open)
+        open=false → setpoint MIN (forces valve closed)
         """
         zone_name: str | None = call.data.get("zone_name")
         channel_idx: int | None = call.data.get("channel")
-        temperature: float = call.data["temperature"]
+        temp = MAX_TEMP if call.data["open"] else MIN_TEMP
 
         for entry_id, coordinator in hass.data.get(DOMAIN, {}).items():
             entry = hass.config_entries.async_get_entry(entry_id)
@@ -110,14 +106,14 @@ def _register_services(hass: HomeAssistant) -> None:
             if zone_name is not None:
                 for ch in coordinator.active_channels:
                     if channel_display_name(entry.options, ch).lower() == zone_name.lower():
-                        await coordinator.async_set_temperature(ch, temperature)
+                        await coordinator.async_set_temperature(ch, temp)
                         return
             elif channel_idx is not None and channel_idx in coordinator.active_channels:
-                await coordinator.async_set_temperature(channel_idx, temperature)
+                await coordinator.async_set_temperature(channel_idx, temp)
                 return
 
         _LOGGER.warning(
-            "set_temperature: no matching zone found (zone_name=%r, channel=%r)",
+            "set_valve: no matching zone found (zone_name=%r, channel=%r)",
             zone_name,
             channel_idx,
         )
@@ -154,10 +150,8 @@ def _register_services(hass: HomeAssistant) -> None:
                     {
                         "channel": ch,
                         "name": channel_display_name(entry.options, ch),
-                        "current_temperature": data.get(ch_key(ch, KEY_AIR_TEMP)),
-                        "target_temperature": data.get(ch_key(ch, KEY_DESIRED_TEMP)),
                         "valve_open": data.get(ch_key(ch, KEY_VALVE_OPEN), False),
-                        "thermostat_lost": data.get(ch_key(ch, KEY_TP_LOST), False),
+                        "setpoint": data.get(ch_key(ch, KEY_DESIRED_TEMP)),
                     }
                 )
 
@@ -165,9 +159,9 @@ def _register_services(hass: HomeAssistant) -> None:
 
     hass.services.async_register(
         DOMAIN,
-        SERVICE_SET_TEMPERATURE,
-        _handle_set_temperature,
-        schema=_SET_TEMPERATURE_SCHEMA,
+        SERVICE_SET_VALVE,
+        _handle_set_valve,
+        schema=_SET_VALVE_SCHEMA,
     )
     hass.services.async_register(
         DOMAIN,

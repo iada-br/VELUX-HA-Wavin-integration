@@ -77,7 +77,7 @@ KEY_CONFIGURED  = "configured"  # True when a thermostat is physically wired (el
 CONF_CHANNEL_NAMES = "channel_names"
 
 # ── Service names ─────────────────────────────────────────────────────────────
-SERVICE_SET_TEMPERATURE = "set_temperature"
+SERVICE_SET_VALVE = "set_valve"
 SERVICE_GET_CHANNEL_INFO = "get_channel_info"
 
 

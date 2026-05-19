@@ -15,7 +15,6 @@ from homeassistant.helpers.update_coordinator import (
 
 from .client import CannotConnect, WavinClient, raw_to_temp
 from .const import (
-    CAT_ELEMENTS,
     CAT_PACKED,
     CAT_CHANNELS,
     CONF_ACTIVE_CHANNELS,
@@ -26,15 +25,11 @@ from .const import (
     IDX_CH_MANUAL_TEMP,
     IDX_CH_PRIMARY_ELEMENT,
     IDX_CH_TIMER_EVENT,
-    IDX_ELEM_AIR_TEMP,
-    KEY_AIR_TEMP,
     KEY_DESIRED_TEMP,
-    KEY_FLOOR_TEMP,
     KEY_TP_LOST,
     KEY_VALVE_OPEN,
     MAX_TEMP,
     MIN_TEMP,
-    PRIMARY_ELEMENT_IDX_MASK,
     PRIMARY_ELEMENT_TP_LOST_MASK,
     TIMER_EVENT_OUTP_ON_MASK,
     ch_key,
@@ -121,17 +116,13 @@ class WavinCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         data: dict[str, Any] = {}
 
         for ch in self.active_channels:
-            # ── Primary element pointer ────────────────────────────────────
+            # ── Thermostat-lost flag ───────────────────────────────────────
             prim = self.client.read_registers(
                 CAT_CHANNELS, IDX_CH_PRIMARY_ELEMENT, page=ch, qty=1
             )
-            if prim is not None:
-                element_idx = prim[0] & PRIMARY_ELEMENT_IDX_MASK
-                tp_lost = bool(prim[0] & PRIMARY_ELEMENT_TP_LOST_MASK)
-            else:
-                element_idx = 0
-                tp_lost = True
-            data[ch_key(ch, KEY_TP_LOST)] = tp_lost
+            data[ch_key(ch, KEY_TP_LOST)] = (
+                bool(prim[0] & PRIMARY_ELEMENT_TP_LOST_MASK) if prim else True
+            )
 
             # ── Valve / output status ──────────────────────────────────────
             timer = self.client.read_registers(
@@ -148,26 +139,6 @@ class WavinCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             data[ch_key(ch, KEY_DESIRED_TEMP)] = (
                 raw_to_temp(setp[0]) if setp else None
             )
-
-            # ── Temperature sensors ────────────────────────────────────────
-            # Temperature is stored under the element index, not the zone index.
-            if element_idx > 0 and not tp_lost:
-                temps = self.client.read_registers(
-                    CAT_ELEMENTS, IDX_ELEM_AIR_TEMP, page=element_idx, qty=2
-                )
-                if temps is not None and len(temps) == 2:
-                    data[ch_key(ch, KEY_AIR_TEMP)] = raw_to_temp(temps[0])
-                    data[ch_key(ch, KEY_FLOOR_TEMP)] = raw_to_temp(temps[1])
-                else:
-                    data[ch_key(ch, KEY_AIR_TEMP)] = None
-                    data[ch_key(ch, KEY_FLOOR_TEMP)] = None
-            else:
-                data[ch_key(ch, KEY_AIR_TEMP)] = None
-                data[ch_key(ch, KEY_FLOOR_TEMP)] = None
-                if element_idx == 0:
-                    _LOGGER.debug("Zone %d: no thermostat configured", ch + 1)
-                else:
-                    _LOGGER.debug("Zone %d: thermostat lost, skipping temp read", ch + 1)
 
         return data
 
