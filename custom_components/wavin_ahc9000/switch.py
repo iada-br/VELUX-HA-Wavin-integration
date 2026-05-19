@@ -1,7 +1,7 @@
 """Switch platform for Wavin AHC 9000 valve control."""
 from __future__ import annotations
 
-from homeassistant.components.switch import SwitchDeviceClass, SwitchEntity
+from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -36,7 +36,6 @@ class WavinValveSwitch(CoordinatorEntity[WavinCoordinator], SwitchEntity):
     """
 
     _attr_has_entity_name = True
-    _attr_device_class = SwitchDeviceClass.HEAT
 
     def __init__(
         self,
