@@ -65,12 +65,14 @@ MAX_TEMP = 35.0
 TEMP_STEP = 0.5
 
 # ── Coordinator data-dict keys ────────────────────────────────────────────────
-KEY_AIR_TEMP    = "air_temp"
-KEY_FLOOR_TEMP  = "floor_temp"
+KEY_AIR_TEMP     = "air_temp"
+KEY_FLOOR_TEMP   = "floor_temp"
 KEY_DESIRED_TEMP = "desired_temp"
-KEY_VALVE_OPEN  = "valve_open"
-KEY_TP_LOST     = "tp_lost"
-KEY_CONFIGURED  = "configured"  # True when a thermostat is physically wired (element_idx > 0)
+KEY_COMFORT_TEMP = "comfort_temp"
+KEY_ECO_TEMP     = "eco_temp"
+KEY_VALVE_OPEN   = "valve_open"
+KEY_TP_LOST      = "tp_lost"
+KEY_CONFIGURED   = "configured"  # True when a thermostat is physically wired (element_idx > 0)
 
 
 # ── Channel naming ────────────────────────────────────────────────────────────

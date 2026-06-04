@@ -23,12 +23,16 @@ from .const import (
     CONF_SLAVE_ID,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    IDX_CH_COMFORT_TEMP,
+    IDX_CH_ECO_TEMP,
     IDX_CH_MANUAL_TEMP,
     IDX_CH_PRIMARY_ELEMENT,
     IDX_CH_TIMER_EVENT,
     IDX_ELEM_AIR_TEMP,
     KEY_AIR_TEMP,
+    KEY_COMFORT_TEMP,
     KEY_DESIRED_TEMP,
+    KEY_ECO_TEMP,
     KEY_FLOOR_TEMP,
     KEY_TP_LOST,
     KEY_VALVE_OPEN,
@@ -148,6 +152,13 @@ class WavinCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 raw_to_temp(setp[0]) if setp else None
             )
 
+            # ── Comfort / eco limits ──────────────────────────────────────
+            comfort = self.client.read_registers(CAT_PACKED, IDX_CH_COMFORT_TEMP, page=ch, qty=1)
+            data[ch_key(ch, KEY_COMFORT_TEMP)] = raw_to_temp(comfort[0]) if comfort else None
+
+            eco = self.client.read_registers(CAT_PACKED, IDX_CH_ECO_TEMP, page=ch, qty=1)
+            data[ch_key(ch, KEY_ECO_TEMP)] = raw_to_temp(eco[0]) if eco else None
+
             # ── Air (+ floor) temperature ──────────────────────────────────
             # element_idx is 1-based; register pages for CAT_ELEMENTS are
             # 0-based, so page = element_idx - 1.
@@ -195,4 +206,32 @@ class WavinCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 " (write may still have taken effect; next poll will confirm)",
                 channel + 1, temp_celsius,
             )
+        await self.async_request_refresh()
+
+    async def async_set_comfort_temp(self, channel: int, temp_celsius: float) -> None:
+        """Write the comfort (upper) temperature limit for a zone."""
+        temp_celsius = max(MIN_TEMP, min(MAX_TEMP, temp_celsius))
+        raw_val = int(round(temp_celsius * 10))
+
+        def _write() -> bool:
+            self.client.ensure_connected()
+            return self.client.write_register(
+                CAT_PACKED, IDX_CH_COMFORT_TEMP, page=channel, val=raw_val
+            )
+
+        await self.hass.async_add_executor_job(_write)
+        await self.async_request_refresh()
+
+    async def async_set_eco_temp(self, channel: int, temp_celsius: float) -> None:
+        """Write the eco (lower) temperature limit for a zone."""
+        temp_celsius = max(MIN_TEMP, min(MAX_TEMP, temp_celsius))
+        raw_val = int(round(temp_celsius * 10))
+
+        def _write() -> bool:
+            self.client.ensure_connected()
+            return self.client.write_register(
+                CAT_PACKED, IDX_CH_ECO_TEMP, page=channel, val=raw_val
+            )
+
+        await self.hass.async_add_executor_job(_write)
         await self.async_request_refresh()

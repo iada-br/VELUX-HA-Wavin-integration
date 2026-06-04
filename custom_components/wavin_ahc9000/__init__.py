@@ -27,7 +27,7 @@ from .coordinator import WavinCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.SWITCH]
+PLATFORMS: list[Platform] = [Platform.CLIMATE, Platform.NUMBER, Platform.SENSOR, Platform.SWITCH]
 
 _SET_VALVE_SCHEMA = vol.Schema(
     {
