@@ -26,39 +26,34 @@ IDX_CH_DESIRED_TEMP = 0x10
 SENSOR_NA = 0x7FFF
 
 
-# -- CRC-16 Modbus ------------------------------------------------------------─
-def crc16(data: bytes) -> bytes:
-    crc = 0xFFFF
-    for b in data:
-        crc ^= b
-        for _ in range(8):
-            crc = (crc >> 1) ^ 0xA001 if crc & 1 else crc >> 1
-    return struct.pack("<H", crc)
+# -- MBAP frame builder -------------------------------------------------------
+_tid = 0
 
+def next_tid() -> int:
+    global _tid
+    _tid = (_tid + 1) & 0xFFFF
+    return _tid
 
-# -- Frame builders ------------------------------------------------------------
-def build_read(cat, idx, page, qty=1) -> bytes:
-    pdu = bytes([SLAVE, CMD_READ, cat, idx, page, qty])
-    return pdu + crc16(pdu)
+def build_read(cat, idx, page, qty=1) -> tuple[bytes, int]:
+    """Return (mbap_frame, tid)."""
+    tid = next_tid()
+    pdu = bytes([CMD_READ, cat, idx, page, qty])
+    frame = struct.pack(">HHHB", tid, 0, 1 + len(pdu), SLAVE) + pdu
+    return frame, tid
 
 
 # -- Response parser ----------------------------------------------------------─
-def parse_response(raw: bytes, expected_bc: int):
-    """Scan buffer for first valid FC 0x43 response with the right byte count."""
-    for i in range(len(raw) - 4):
-        if raw[i] != SLAVE or raw[i + 1] != CMD_READ:
-            continue
-        bc = raw[i + 2]
-        if bc != expected_bc:
-            continue
-        end = i + 3 + bc + 2
-        if end > len(raw):
-            continue
-        frame = raw[i:end]
-        if crc16(frame[:-2]) != frame[-2:]:
-            continue
-        n = bc // 2
-        return list(struct.unpack(f">{n}H", frame[3: 3 + bc]))
+def parse_response(raw: bytes, expected_bc: int, tid: int):
+    """Scan buffer for MBAP frame matching tid with correct byte count."""
+    tid_bytes = struct.pack(">H", tid)
+    i = 0
+    while i + 9 <= len(raw):
+        if raw[i:i+2] == tid_bytes and raw[i+7] == CMD_READ:
+            bc = raw[i+8]
+            if bc == expected_bc and len(raw) >= i + 9 + bc:
+                n = bc // 2
+                return list(struct.unpack(f">{n}H", raw[i+9: i+9+bc]))
+        i += 1
     return None
 
 
@@ -71,8 +66,8 @@ def raw_to_temp(raw: int):
 
 # -- Query helper --------------------------------------------------------------
 def query(sock, cat, idx, page, qty=1, timeout=1.5, label=""):
-    frame = build_read(cat, idx, page, qty)
-    print(f"  TX {label:35s} → {frame.hex()}")
+    frame, tid = build_read(cat, idx, page, qty)
+    print(f"  TX {label:35s} -> {frame.hex()}  (tid={tid})")
 
     # pre-query drain
     sock.settimeout(0.05)
@@ -86,7 +81,7 @@ def query(sock, cat, idx, page, qty=1, timeout=1.5, label=""):
     except socket.timeout:
         pass
     if drained:
-        print(f"  drained {len(drained)} stale bytes: {drained.hex()}")
+        print(f"  drained {len(drained)} stale bytes")
 
     sock.settimeout(0.2)
     try:
@@ -102,14 +97,14 @@ def query(sock, cat, idx, page, qty=1, timeout=1.5, label=""):
             chunk = sock.recv(512)
             if chunk:
                 raw += chunk
-                result = parse_response(raw, qty * 2)
+                result = parse_response(raw, qty * 2, tid)
                 if result is not None:
-                    print(f"  RX raw: {raw.hex()}")
+                    print(f"  RX ({len(raw)} bytes): {raw[:32].hex()}{'...' if len(raw)>32 else ''}")
                     return result
         except socket.timeout:
             pass
 
-    print(f"  RX timeout — raw so far: {raw.hex() if raw else '(empty)'}")
+    print(f"  RX timeout ({len(raw)} bytes raw: {raw[:32].hex() if raw else 'empty'})")
     return None
 
 

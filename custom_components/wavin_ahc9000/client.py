@@ -141,23 +141,23 @@ class WavinClient:
     # ── Response parser ───────────────────────────────────────────────────────
 
     @staticmethod
-    def _parse_read_response(raw: bytes, expected_bc: int) -> Optional[list[int]]:
-        """Parse a Modbus TCP FC 0x43 response.
+    def _parse_read_response(
+        raw: bytes, expected_bc: int, tid_bytes: bytes
+    ) -> Optional[list[int]]:
+        """Scan raw buffer for an MBAP FC 0x43 response matching tid_bytes.
 
-        Wire format:
+        Wire format per frame:
           [TID:2][Protocol:2][Length:2][UnitID:1][FC=0x43:1][ByteCount:1][Data...]
         """
-        if len(raw) < 9:
-            return None
-        if raw[7] != FC_READ:
-            return None
-        bc = raw[8]
-        if bc != expected_bc:
-            return None
-        if len(raw) < 9 + bc:
-            return None
-        n = bc // 2
-        return list(struct.unpack(f">{n}H", raw[9: 9 + bc]))
+        i = 0
+        while i + 9 <= len(raw):
+            if raw[i:i + 2] == tid_bytes and raw[i + 7] == FC_READ:
+                bc = raw[i + 8]
+                if bc == expected_bc and len(raw) >= i + 9 + bc:
+                    n = bc // 2
+                    return list(struct.unpack(f">{n}H", raw[i + 9: i + 9 + bc]))
+            i += 1
+        return None
 
     # ── Register reads ────────────────────────────────────────────────────────
 
@@ -173,8 +173,9 @@ class WavinClient:
             if self._sock is None:
                 return None
 
-            frame, _ = self._build_read(cat, idx, page, qty)
+            frame, tid = self._build_read(cat, idx, page, qty)
             expected_bc = qty * 2
+            tid_bytes = struct.pack(">H", tid)
 
             try:
                 self._sock.sendall(frame)
@@ -192,7 +193,7 @@ class WavinClient:
                     chunk = self._sock.recv(512)
                     if chunk:
                         raw += chunk
-                        result = self._parse_read_response(raw, expected_bc)
+                        result = self._parse_read_response(raw, expected_bc, tid_bytes)
                         if result is not None:
                             return result
                     else:

@@ -17,6 +17,8 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
+    CONF_CHANNEL_COMFORT_TEMPS,
+    CONF_CHANNEL_ECO_TEMPS,
     DOMAIN,
     KEY_AIR_TEMP,
     KEY_DESIRED_TEMP,
@@ -25,6 +27,7 @@ from .const import (
     MIN_TEMP,
     TEMP_STEP,
     ch_key,
+    channel_display_name,
 )
 from .coordinator import WavinCoordinator
 
@@ -62,8 +65,6 @@ class WavinClimate(CoordinatorEntity[WavinCoordinator], ClimateEntity):
     _attr_supported_features = ClimateEntityFeature.TARGET_TEMPERATURE
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_target_temperature_step = TEMP_STEP
-    _attr_min_temp = MIN_TEMP
-    _attr_max_temp = MAX_TEMP
 
     def __init__(
         self,
@@ -73,10 +74,15 @@ class WavinClimate(CoordinatorEntity[WavinCoordinator], ClimateEntity):
     ) -> None:
         super().__init__(coordinator)
         self._channel = channel
-        # Stable unique_id anchored to the config entry + zone number.
         self._attr_unique_id = f"{entry.entry_id}_climate_ch{channel}"
-        # Entity name shown as "Zone N" under the "Wavin AHC 9000" device.
-        self._attr_name = f"Zone {channel + 1}"
+        self._attr_name = channel_display_name(entry.options, channel, entry.data)
+
+        # Use per-channel comfort/eco limits if configured, otherwise fall back to global defaults.
+        comfort = entry.options.get(CONF_CHANNEL_COMFORT_TEMPS, {}).get(str(channel))
+        eco     = entry.options.get(CONF_CHANNEL_ECO_TEMPS,     {}).get(str(channel))
+        self._attr_max_temp = float(comfort) if comfort is not None else MAX_TEMP
+        self._attr_min_temp = float(eco)     if eco     is not None else MIN_TEMP
+
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
             name="Wavin AHC 9000",

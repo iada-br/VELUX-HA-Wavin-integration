@@ -76,6 +76,17 @@ KEY_CONFIGURED  = "configured"  # True when a thermostat is physically wired (el
 # ── Channel naming ────────────────────────────────────────────────────────────
 CONF_CHANNEL_NAMES = "channel_names"
 
+# ── Thermostat types ──────────────────────────────────────────────────────────
+THERMOSTAT_AIR_ONLY  = "air_only"   # thermostat with air sensor only
+THERMOSTAT_AIR_FLOOR = "air_floor"  # thermostat with air + floor sensors
+
+CONF_CHANNEL_THERMOSTAT_TYPES = "channel_thermostat_types"  # dict str(ch) → type
+CONF_CHANNEL_COMFORT_TEMPS    = "channel_comfort_temps"     # dict str(ch) → float °C
+CONF_CHANNEL_ECO_TEMPS        = "channel_eco_temps"         # dict str(ch) → float °C
+
+DEFAULT_COMFORT_TEMP = 21.0
+DEFAULT_ECO_TEMP     = 19.0
+
 # ── Service names ─────────────────────────────────────────────────────────────
 SERVICE_SET_VALVE = "set_valve"
 SERVICE_GET_CHANNEL_INFO = "get_channel_info"
@@ -91,6 +102,16 @@ def ch_key(channel: int, key: str) -> str:
     return f"ch{channel}_{key}"
 
 
-def channel_display_name(options: dict, channel: int) -> str:
-    """Return the user-configured name for a channel (0-based), falling back to 'Zone N'."""
-    return options.get(CONF_CHANNEL_NAMES, {}).get(str(channel), f"Zone {channel + 1}")
+def channel_display_name(options: dict, channel: int, data: dict | None = None) -> str:
+    """Return the user-configured name for a channel (0-based), falling back to 'Zone N'.
+
+    Checks options first, then data (initial-setup values), then default.
+    """
+    names = options.get(CONF_CHANNEL_NAMES) or (data or {}).get(CONF_CHANNEL_NAMES, {})
+    return names.get(str(channel), f"Zone {channel + 1}")
+
+
+def channel_thermostat_type(options: dict, channel: int, data: dict | None = None) -> str:
+    """Return the thermostat type for a channel, defaulting to air-only."""
+    types = options.get(CONF_CHANNEL_THERMOSTAT_TYPES) or (data or {}).get(CONF_CHANNEL_THERMOSTAT_TYPES, {})
+    return types.get(str(channel), THERMOSTAT_AIR_ONLY)

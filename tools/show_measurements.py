@@ -69,6 +69,7 @@ class Client:
 
     def _send_read(self, cat: int, idx: int, page: int, qty: int) -> Optional[list[int]]:
         tid = self._tid_next()
+        tid_bytes = struct.pack(">H", tid)
         pdu = bytes([FC_READ, cat, idx, page, qty])
         frame = struct.pack(">HHHB", tid, 0, 1 + len(pdu), self.slave) + pdu
         expected_bc = qty * 2
@@ -84,11 +85,15 @@ class Client:
                 if not chunk:
                     return None
                 raw += chunk
-                if len(raw) >= 9 and raw[7] == FC_READ:
-                    bc = raw[8]
-                    if bc == expected_bc and len(raw) >= 9 + bc:
-                        n = bc // 2
-                        return list(struct.unpack(f">{n}H", raw[9: 9 + bc]))
+                # Scan for an MBAP frame whose TID matches our query
+                i = 0
+                while i + 9 <= len(raw):
+                    if raw[i:i+2] == tid_bytes and raw[i+7] == FC_READ:
+                        bc = raw[i+8]
+                        if bc == expected_bc and len(raw) >= i + 9 + bc:
+                            n = bc // 2
+                            return list(struct.unpack(f">{n}H", raw[i+9: i+9+bc]))
+                    i += 1
             except socket.timeout:
                 pass
         return None
@@ -135,7 +140,7 @@ def read_measurements(c: Client) -> dict:
         setp = c._send_read(CAT_PACKED, IDX_CH_MANUAL_TEMP, page=ch, qty=1)
         desired = raw_to_temp(setp[0]) if setp else None
 
-        temps = c._send_read(CAT_ELEMENTS, IDX_ELEM_AIR_TEMP, page=element_idx, qty=2)
+        temps = c._send_read(CAT_ELEMENTS, IDX_ELEM_AIR_TEMP, page=element_idx - 1, qty=2)
         if temps and len(temps) == 2:
             air   = raw_to_temp(temps[0])
             floor = raw_to_temp(temps[1])

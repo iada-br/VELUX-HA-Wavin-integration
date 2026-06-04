@@ -15,6 +15,7 @@ from homeassistant.helpers.update_coordinator import (
 
 from .client import CannotConnect, WavinClient, raw_to_temp
 from .const import (
+    CAT_ELEMENTS,
     CAT_PACKED,
     CAT_CHANNELS,
     CONF_ACTIVE_CHANNELS,
@@ -25,14 +26,20 @@ from .const import (
     IDX_CH_MANUAL_TEMP,
     IDX_CH_PRIMARY_ELEMENT,
     IDX_CH_TIMER_EVENT,
+    IDX_ELEM_AIR_TEMP,
+    KEY_AIR_TEMP,
     KEY_DESIRED_TEMP,
+    KEY_FLOOR_TEMP,
     KEY_TP_LOST,
     KEY_VALVE_OPEN,
     MAX_TEMP,
     MIN_TEMP,
+    PRIMARY_ELEMENT_IDX_MASK,
     PRIMARY_ELEMENT_TP_LOST_MASK,
+    THERMOSTAT_AIR_FLOOR,
     TIMER_EVENT_OUTP_ON_MASK,
     ch_key,
+    channel_thermostat_type,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -116,10 +123,11 @@ class WavinCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         data: dict[str, Any] = {}
 
         for ch in self.active_channels:
-            # ── Thermostat-lost flag ───────────────────────────────────────
+            # ── Thermostat-lost flag + element index ───────────────────────
             prim = self.client.read_registers(
                 CAT_CHANNELS, IDX_CH_PRIMARY_ELEMENT, page=ch, qty=1
             )
+            element_idx = (prim[0] & PRIMARY_ELEMENT_IDX_MASK) if prim else 0
             data[ch_key(ch, KEY_TP_LOST)] = (
                 bool(prim[0] & PRIMARY_ELEMENT_TP_LOST_MASK) if prim else True
             )
@@ -139,6 +147,29 @@ class WavinCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             data[ch_key(ch, KEY_DESIRED_TEMP)] = (
                 raw_to_temp(setp[0]) if setp else None
             )
+
+            # ── Air (+ floor) temperature ──────────────────────────────────
+            # element_idx is 1-based; register pages for CAT_ELEMENTS are
+            # 0-based, so page = element_idx - 1.
+            has_floor = (
+                channel_thermostat_type(self._entry.options, ch, self._entry.data)
+                == THERMOSTAT_AIR_FLOOR
+            )
+            if element_idx > 0:
+                qty = 2 if has_floor else 1
+                temps = self.client.read_registers(
+                    CAT_ELEMENTS, IDX_ELEM_AIR_TEMP,
+                    page=element_idx - 1, qty=qty,
+                )
+                data[ch_key(ch, KEY_AIR_TEMP)] = (
+                    raw_to_temp(temps[0]) if temps else None
+                )
+                data[ch_key(ch, KEY_FLOOR_TEMP)] = (
+                    raw_to_temp(temps[1]) if (has_floor and temps and len(temps) > 1) else None
+                )
+            else:
+                data[ch_key(ch, KEY_AIR_TEMP)] = None
+                data[ch_key(ch, KEY_FLOOR_TEMP)] = None
 
         return data
 

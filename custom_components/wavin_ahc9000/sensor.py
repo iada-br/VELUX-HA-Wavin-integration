@@ -21,7 +21,10 @@ from .const import (
     KEY_AIR_TEMP,
     KEY_FLOOR_TEMP,
     KEY_DESIRED_TEMP,
+    THERMOSTAT_AIR_FLOOR,
     ch_key,
+    channel_display_name,
+    channel_thermostat_type,
 )
 from .coordinator import WavinCoordinator
 
@@ -38,17 +41,21 @@ async def async_setup_entry(
     entities: list[SensorEntity] = []
 
     for ch in coordinator.active_channels:
+        room = channel_display_name(entry.options, ch, entry.data)
         entities.append(
             WavinTemperatureSensor(
-                coordinator, entry, ch, KEY_AIR_TEMP, "Air Temperature", enabled=True
+                coordinator, entry, ch, KEY_AIR_TEMP,
+                f"{room} Air Temperature", enabled=True,
             )
         )
-        # Floor sensor disabled by default — only enable if a floor sensor is wired.
-        entities.append(
-            WavinTemperatureSensor(
-                coordinator, entry, ch, KEY_FLOOR_TEMP, "Floor Temperature", enabled=False
+        # Floor sensor only created when the channel is configured as air+floor type.
+        if channel_thermostat_type(entry.options, ch, entry.data) == THERMOSTAT_AIR_FLOOR:
+            entities.append(
+                WavinTemperatureSensor(
+                    coordinator, entry, ch, KEY_FLOOR_TEMP,
+                    f"{room} Floor Temperature", enabled=True,
+                )
             )
-        )
 
     async_add_entities(entities)
 
