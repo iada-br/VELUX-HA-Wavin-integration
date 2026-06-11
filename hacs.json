@@ -1,0 +1,6 @@
+{
+  "name": "VELUX Wavin Integration",
+  "content_in_root": false,
+  "domains": ["climate", "sensor", "number", "switch"],
+  "homeassistant": "2024.1.0"
+}
