@@ -9,7 +9,7 @@ CONF_ACTIVE_CHANNELS = "active_channels"  # list[int] of channel indices with a 
 CONF_SCAN_INTERVAL = "scan_interval"
 
 # ── Defaults ─────────────────────────────────────────────────────────────────
-DEFAULT_HOST = "10.10.100.254"
+DEFAULT_HOST = "192.168.1.199"
 # USR-TCP232 Modbus TCP gateway port (confirmed by live device test).
 DEFAULT_PORT = 8899
 DEFAULT_SLAVE_ID = 0x01
@@ -86,8 +86,8 @@ CONF_CHANNEL_THERMOSTAT_TYPES = "channel_thermostat_types"  # dict str(ch) → t
 CONF_CHANNEL_COMFORT_TEMPS    = "channel_comfort_temps"     # dict str(ch) → float °C
 CONF_CHANNEL_ECO_TEMPS        = "channel_eco_temps"         # dict str(ch) → float °C
 
-DEFAULT_COMFORT_TEMP = 21.0
-DEFAULT_ECO_TEMP     = 19.0
+DEFAULT_COMFORT_TEMP = 25.0
+DEFAULT_ECO_TEMP     = 14.0
 
 # ── Service names ─────────────────────────────────────────────────────────────
 SERVICE_SET_VALVE = "set_valve"
