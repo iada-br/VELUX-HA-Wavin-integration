@@ -26,6 +26,7 @@ import argparse
 import ipaddress
 import re
 import socket
+import struct
 import subprocess
 import sys
 import os
@@ -208,37 +209,34 @@ def scan_subnet(subnet: str, port: int) -> list[str]:
 # Modbus verify
 # ---------------------------------------------------------------------------
 
+def _crc16(data: bytes) -> bytes:
+    crc = 0xFFFF
+    for b in data:
+        crc ^= b
+        for _ in range(8):
+            crc = (crc >> 1) ^ 0xA001 if crc & 1 else crc >> 1
+    return struct.pack("<H", crc)
+
+
 def _build_wavin_probe() -> bytes:
-    """Build a Wavin Read-by-Index request (FC 0x43) for device info.
+    """Build a Wavin Read-by-Index RTU request (FC 0x43) for HW version.
 
-    Reads 1 register from category 0x07 (INFO), index 0x02 (HW version),
-    page 0x00.  The Wavin AHC 9000 gateway responds to this even when it
-    ignores standard FC 0x03 requests.
-
-    Modbus TCP MBAP header (6 bytes) + PDU (5 bytes):
-        [TID:2][PID:2][LEN:2][UNIT:1][FC:1][CAT:1][IDX:1][PAGE:1][QTY:1]
+    The USR gateway is in Transparent mode, so we send a raw Modbus RTU frame
+    (slave + FC + payload + CRC) instead of a Modbus TCP MBAP frame.
     """
-    tid    = (0x00, 0x01)
-    pid    = (0x00, 0x00)
-    length = (0x00, 0x06)   # remaining bytes: unit(1) + PDU(5)
-    unit   = 0x01
-    fc     = 0x43           # Wavin Read by Index
-    cat    = 0x07           # CAT_INFO
-    idx    = 0x02           # IDX_INFO_HW_VER
-    page   = 0x00
-    qty    = 0x01
-    return bytes([*tid, *pid, *length, unit, fc, cat, idx, page, qty])
+    pdu = bytes([0x01, 0x43, 0x07, 0x02, 0x00, 0x01])  # slave FC CAT IDX PAGE QTY
+    return pdu + _crc16(pdu)
 
 
 def verify_modbus(host: str, port: int) -> bool:
-    """Return True if host:port responds to a Wavin Modbus TCP probe."""
+    """Return True if host:port responds to a Wavin Modbus RTU probe."""
     try:
         with socket.create_connection((host, port), timeout=MODBUS_PROBE_TIMEOUT) as s:
             s.sendall(_build_wavin_probe())
             s.settimeout(MODBUS_PROBE_TIMEOUT)
             data = s.recv(256)
-            # Any response ≥ 6 bytes with matching transaction id is valid
-            return len(data) >= 6 and data[0:2] == b"\x00\x01"
+            # RTU response: slave(1) + FC(1) + byte_count(1) + data(2) + CRC(2) = 7 bytes
+            return len(data) >= 5 and data[0] == 0x01 and data[1] == 0x43
     except OSError:
         return False
 

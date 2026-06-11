@@ -15,7 +15,7 @@ import time
 from typing import Optional
 
 # ── Connection defaults (match integration defaults) ──────────────────────────
-DEFAULT_HOST  = "10.10.100.254"
+DEFAULT_HOST  = "192.168.1.199"
 DEFAULT_PORT  = 8899
 DEFAULT_SLAVE = 0x01
 MAX_CHANNELS  = 16
@@ -41,7 +41,18 @@ TIMER_EVENT_OUTP_ON_MASK     = 0x0010
 SENSOR_NA = 0x7FFF
 
 
-# ── Minimal Modbus TCP client ─────────────────────────────────────────────────
+# ── Minimal Modbus RTU-over-TCP client ───────────────────────────────────────
+# The USR gateway is in Transparent mode, so we send raw Modbus RTU frames
+# (with CRC) instead of Modbus TCP (MBAP) frames.
+
+def _crc16(data: bytes) -> bytes:
+    crc = 0xFFFF
+    for b in data:
+        crc ^= b
+        for _ in range(8):
+            crc = (crc >> 1) ^ 0xA001 if crc & 1 else crc >> 1
+    return struct.pack("<H", crc)
+
 
 class Client:
     def __init__(self, host: str, port: int, slave: int) -> None:
@@ -49,7 +60,6 @@ class Client:
         self.port  = port
         self.slave = slave
         self._sock: Optional[socket.socket] = None
-        self._tid  = 0
 
     def connect(self) -> None:
         self._sock = socket.create_connection((self.host, self.port), timeout=5.0)
@@ -63,40 +73,32 @@ class Client:
                 pass
             self._sock = None
 
-    def _tid_next(self) -> int:
-        self._tid = (self._tid + 1) & 0xFFFF
-        return self._tid
-
     def _send_read(self, cat: int, idx: int, page: int, qty: int) -> Optional[list[int]]:
-        tid = self._tid_next()
-        tid_bytes = struct.pack(">H", tid)
-        pdu = bytes([FC_READ, cat, idx, page, qty])
-        frame = struct.pack(">HHHB", tid, 0, 1 + len(pdu), self.slave) + pdu
-        expected_bc = qty * 2
+        pdu = bytes([self.slave, FC_READ, cat, idx, page, qty])
+        self._sock.sendall(pdu + _crc16(pdu))
 
-        self._sock.sendall(frame)
-
+        expected = 3 + qty * 2 + 2  # slave + FC + byte_count + data + CRC
         raw = b""
-        deadline = time.monotonic() + 1.0
-        self._sock.settimeout(0.2)
+        deadline = time.monotonic() + 1.5
+        self._sock.settimeout(0.3)
         while time.monotonic() < deadline:
             try:
                 chunk = self._sock.recv(512)
                 if not chunk:
                     return None
                 raw += chunk
-                # Scan for an MBAP frame whose TID matches our query
-                i = 0
-                while i + 9 <= len(raw):
-                    if raw[i:i+2] == tid_bytes and raw[i+7] == FC_READ:
-                        bc = raw[i+8]
-                        if bc == expected_bc and len(raw) >= i + 9 + bc:
-                            n = bc // 2
-                            return list(struct.unpack(f">{n}H", raw[i+9: i+9+bc]))
-                    i += 1
+                if len(raw) >= expected:
+                    break
             except socket.timeout:
                 pass
-        return None
+
+        if len(raw) < 5:
+            return None
+        bc = raw[2]
+        if len(raw) < 3 + bc + 2:
+            return None
+        n = bc // 2
+        return list(struct.unpack(f">{n}H", raw[3: 3 + bc]))
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

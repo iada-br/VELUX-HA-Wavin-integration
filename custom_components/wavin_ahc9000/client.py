@@ -1,14 +1,14 @@
 """
-Modbus TCP client for the Wavin AHC 9000.
+Modbus RTU-over-TCP client for the Wavin AHC 9000.
 
 Physical path:
-  Home Assistant  -->  TCP  -->  USR-TCP232 (Modbus TCP gateway)
+  Home Assistant  -->  TCP  -->  USR-TCP232 (transparent gateway)
   -->  RS-485 RTU  -->  Wavin AHC 9000 AC-116 module
 
-The USR-TCP232 runs in Modbus TCP gateway mode on port 8899:
-  - Accepts Modbus TCP frames (MBAP header + PDU, no CRC)
-  - Converts them to Modbus RTU on the RS-485 bus (adds CRC)
-  - Strips CRC from RTU responses and returns Modbus TCP responses
+The USR-TCP232 is configured in Transparent mode (Data_Transfor_Mode=0),
+meaning it passes raw bytes between TCP and RS-485 without any Modbus
+conversion. We therefore send complete Modbus RTU frames (with CRC) over
+the TCP connection.
 
 All public methods are synchronous and MUST be called from an executor
 thread (via hass.async_add_executor_job), never from the HA event loop.
@@ -32,7 +32,15 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-_MODBUS_PROTOCOL = 0x0000
+
+def _crc16(data: bytes) -> bytes:
+    """CRC-16/IBM as used by Modbus RTU."""
+    crc = 0xFFFF
+    for b in data:
+        crc ^= b
+        for _ in range(8):
+            crc = (crc >> 1) ^ 0xA001 if crc & 1 else crc >> 1
+    return struct.pack("<H", crc)
 
 
 class WavinClientError(Exception):
@@ -62,11 +70,6 @@ class WavinClient:
         self._sock: Optional[socket.socket] = None
         self._lock = threading.Lock()
         self._connected = False
-        self._tid = 0
-
-    def _next_tid(self) -> int:
-        self._tid = (self._tid + 1) & 0xFFFF
-        return self._tid
 
     # ── Connection management ─────────────────────────────────────────────────
 
@@ -111,60 +114,47 @@ class WavinClient:
             _LOGGER.debug("Reconnecting to %s:%d", self._host, self._port)
             self.connect()
 
-    # ── MBAP frame builders ───────────────────────────────────────────────────
+    # ── RTU frame builders ────────────────────────────────────────────────────
 
-    def _wrap_mbap(self, pdu: bytes, tid: int) -> bytes:
-        """Prepend 7-byte MBAP header to a PDU.
+    def _build_read(self, cat: int, idx: int, page: int, qty: int) -> bytes:
+        """FC 0x43 read request as Modbus RTU frame (with CRC)."""
+        pdu = bytes([self._slave, FC_READ, cat, idx, page, qty])
+        return pdu + _crc16(pdu)
 
-        MBAP: [TID:2][Protocol=0:2][Length:2][UnitID:1]
-        Length = 1 (unit) + len(pdu).
-        """
-        return struct.pack(">HHHB", tid, _MODBUS_PROTOCOL, 1 + len(pdu), self._slave) + pdu
-
-    def _build_read(self, cat: int, idx: int, page: int, qty: int) -> tuple[bytes, int]:
-        """FC 0x43 read request wrapped in MBAP."""
-        tid = self._next_tid()
-        pdu = bytes([FC_READ, cat, idx, page, qty])
-        return self._wrap_mbap(pdu, tid), tid
-
-    def _build_write(self, cat: int, idx: int, page: int, val: int) -> tuple[bytes, int]:
-        """FC 0x44 write request wrapped in MBAP."""
-        tid = self._next_tid()
+    def _build_write(self, cat: int, idx: int, page: int, val: int) -> bytes:
+        """FC 0x44 write request as Modbus RTU frame (with CRC)."""
         val_u16 = val & 0xFFFF
         pdu = bytes([
-            FC_WRITE, cat, idx, page, 0x00,
+            self._slave, FC_WRITE, cat, idx, page, 0x00,
             (val_u16 >> 8) & 0xFF,
             val_u16 & 0xFF,
         ])
-        return self._wrap_mbap(pdu, tid), tid
+        return pdu + _crc16(pdu)
 
     # ── Response parser ───────────────────────────────────────────────────────
 
     @staticmethod
-    def _parse_read_response(
-        raw: bytes, expected_bc: int, tid_bytes: bytes
-    ) -> Optional[list[int]]:
-        """Scan raw buffer for an MBAP FC 0x43 response matching tid_bytes.
+    def _parse_read_response(raw: bytes, expected_bc: int) -> Optional[list[int]]:
+        """Parse an RTU FC 0x43 response.
 
-        Wire format per frame:
-          [TID:2][Protocol:2][Length:2][UnitID:1][FC=0x43:1][ByteCount:1][Data...]
+        Wire format: [SLAVE:1][FC=0x43:1][ByteCount:1][Data...][CRC:2]
         """
-        i = 0
-        while i + 9 <= len(raw):
-            if raw[i:i + 2] == tid_bytes and raw[i + 7] == FC_READ:
-                bc = raw[i + 8]
-                if bc == expected_bc and len(raw) >= i + 9 + bc:
-                    n = bc // 2
-                    return list(struct.unpack(f">{n}H", raw[i + 9: i + 9 + bc]))
-            i += 1
-        return None
+        if len(raw) < 5:
+            return None
+        if raw[1] != FC_READ:
+            return None
+        bc = raw[2]
+        if bc != expected_bc or len(raw) < 3 + bc + 2:
+            return None
+        n = bc // 2
+        return list(struct.unpack(f">{n}H", raw[3: 3 + bc]))
 
     # ── Register reads ────────────────────────────────────────────────────────
 
     def read_registers(
         self, cat: int, idx: int, page: int, qty: int = 1
     ) -> Optional[list[int]]:
-        """Send FC 0x43 and return a list of qty raw uint16 values.
+        """Send FC 0x43 RTU frame and return a list of qty raw uint16 values.
 
         Returns None on timeout or socket error. The caller should treat
         None as "data temporarily unavailable" rather than raising.
@@ -173,9 +163,9 @@ class WavinClient:
             if self._sock is None:
                 return None
 
-            frame, tid = self._build_read(cat, idx, page, qty)
+            frame = self._build_read(cat, idx, page, qty)
             expected_bc = qty * 2
-            tid_bytes = struct.pack(">H", tid)
+            expected_len = 3 + expected_bc + 2  # slave+FC+bc + data + CRC
 
             try:
                 self._sock.sendall(frame)
@@ -193,14 +183,15 @@ class WavinClient:
                     chunk = self._sock.recv(512)
                     if chunk:
                         raw += chunk
-                        result = self._parse_read_response(raw, expected_bc, tid_bytes)
+                        result = self._parse_read_response(raw, expected_bc)
                         if result is not None:
                             return result
                     else:
                         self._connected = False
                         return None
                 except socket.timeout:
-                    pass
+                    if len(raw) >= expected_len:
+                        break
                 except OSError as exc:
                     _LOGGER.warning("Recv failed in read_registers: %s", exc)
                     self._connected = False
@@ -218,9 +209,9 @@ class WavinClient:
     def write_register(
         self, cat: int, idx: int, page: int, val: int
     ) -> bool:
-        """Send FC 0x44 and wait for the echo response.
+        """Send FC 0x44 RTU frame and wait for the echo response.
 
-        The gateway echoes back the same PDU in a Modbus TCP response.
+        The device echoes back the same frame on success.
         Returns True when the echo is received, False on timeout.
         A False return does not guarantee the write failed — the next
         coordinator poll will confirm the new value.
@@ -229,7 +220,7 @@ class WavinClient:
             if self._sock is None:
                 return False
 
-            frame, _ = self._build_write(cat, idx, page, val)
+            frame = self._build_write(cat, idx, page, val)
 
             try:
                 self._sock.sendall(frame)
@@ -247,8 +238,8 @@ class WavinClient:
                     chunk = self._sock.recv(512)
                     if chunk:
                         raw += chunk
-                        # Echo response: MBAP (7 bytes) + FC(1) + 6-byte PDU tail
-                        if len(raw) >= 8 and raw[7] == FC_WRITE:
+                        # RTU echo: slave(1) + FC_WRITE(1) + rest(6) + CRC(2) = 10 bytes
+                        if len(raw) >= 2 and raw[1] == FC_WRITE:
                             _LOGGER.debug(
                                 "Write echo OK: cat=0x%02x idx=0x%02x page=%d val=%d",
                                 cat, idx, page, val,

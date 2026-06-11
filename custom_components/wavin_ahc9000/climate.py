@@ -21,7 +21,9 @@ from .const import (
     CONF_CHANNEL_ECO_TEMPS,
     DOMAIN,
     KEY_AIR_TEMP,
+    KEY_COMFORT_TEMP,
     KEY_DESIRED_TEMP,
+    KEY_ECO_TEMP,
     KEY_TP_LOST,
     MAX_TEMP,
     MIN_TEMP,
@@ -76,13 +78,6 @@ class WavinClimate(CoordinatorEntity[WavinCoordinator], ClimateEntity):
         self._channel = channel
         self._attr_unique_id = f"{entry.entry_id}_climate_ch{channel}"
         self._attr_name = channel_display_name(entry.options, channel, entry.data)
-
-        # Use per-channel comfort/eco limits if configured, otherwise fall back to global defaults.
-        comfort = entry.options.get(CONF_CHANNEL_COMFORT_TEMPS, {}).get(str(channel))
-        eco     = entry.options.get(CONF_CHANNEL_ECO_TEMPS,     {}).get(str(channel))
-        self._attr_max_temp = float(comfort) if comfort is not None else MAX_TEMP
-        self._attr_min_temp = float(eco)     if eco     is not None else MIN_TEMP
-
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
             name="Wavin AHC 9000",
@@ -90,6 +85,18 @@ class WavinClimate(CoordinatorEntity[WavinCoordinator], ClimateEntity):
             model="AHC 9000 AC-116",
             configuration_url=f"http://{entry.data['host']}",
         )
+
+    @property
+    def max_temp(self) -> float:
+        """Upper bound for the target temperature slider — live comfort setpoint."""
+        val = self.coordinator.data.get(ch_key(self._channel, KEY_COMFORT_TEMP))
+        return float(val) if val is not None else MAX_TEMP
+
+    @property
+    def min_temp(self) -> float:
+        """Lower bound for the target temperature slider — live eco setpoint."""
+        val = self.coordinator.data.get(ch_key(self._channel, KEY_ECO_TEMP))
+        return float(val) if val is not None else MIN_TEMP
 
     @property
     def available(self) -> bool:
