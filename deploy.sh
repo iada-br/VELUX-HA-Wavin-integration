@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-HA_HOST="homeassistant.local"
+HA_HOST="192.168.1.72"
 HA_USER="root"
 SRC="$(dirname "$0")/custom_components/wavin_ahc9000/"
 DST="/config/custom_components/wavin_ahc9000/"
