@@ -37,8 +37,8 @@ IDX_ELEM_FLOOR_TEMP = 0x05  # Signed int16, 0.1 °C; 0x7FFF = sensor absent
 # ── PACKED DATA (cat=0x02) register indices ───────────────────────────────────
 # Page = zone index (0-based).
 IDX_CH_MANUAL_TEMP  = 0x00  # Signed int16, 0.1 °C — the active setpoint (R/W)
-IDX_CH_COMFORT_TEMP = 0x01  # Signed int16, 0.1 °C
-IDX_CH_ECO_TEMP     = 0x02  # Signed int16, 0.1 °C
+IDX_CH_ECO_TEMP     = 0x01  # Signed int16, 0.1 °C — lower bound (standby/setback)
+IDX_CH_COMFORT_TEMP = 0x02  # Signed int16, 0.1 °C — upper bound (active/comfort)
 
 # ── CHANNELS STATUS (cat=0x03) register indices ───────────────────────────────
 # Page = zone index (0-based).

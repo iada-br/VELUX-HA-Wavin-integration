@@ -88,13 +88,15 @@ class WavinClimate(CoordinatorEntity[WavinCoordinator], ClimateEntity):
 
     @property
     def max_temp(self) -> float:
-        """Upper bound for the target temperature slider — live comfort setpoint."""
+        """Upper bound — live comfort setpoint, falls back to global MAX_TEMP."""
         val = self.coordinator.data.get(ch_key(self._channel, KEY_COMFORT_TEMP))
-        return float(val) if val is not None else MAX_TEMP
+        result = float(val) if val is not None else MAX_TEMP
+        # Guarantee max > min even if device registers have unexpected values
+        return max(result, self.min_temp + TEMP_STEP)
 
     @property
     def min_temp(self) -> float:
-        """Lower bound for the target temperature slider — live eco setpoint."""
+        """Lower bound — live eco setpoint, falls back to global MIN_TEMP."""
         val = self.coordinator.data.get(ch_key(self._channel, KEY_ECO_TEMP))
         return float(val) if val is not None else MIN_TEMP
 
