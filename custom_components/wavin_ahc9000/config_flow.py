@@ -12,9 +12,10 @@ from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import selector
 
-from .client import CannotConnect, WavinClient
+from .client import CannotConnect, WavinClient, raw_to_temp
 from .const import (
     CAT_CHANNELS,
+    CAT_ELEMENTS,
     CAT_PACKED,
     CONF_ACTIVE_CHANNELS,
     CONF_CHANNEL_COMFORT_TEMPS,
@@ -34,8 +35,10 @@ from .const import (
     IDX_CH_COMFORT_TEMP,
     IDX_CH_ECO_TEMP,
     IDX_CH_PRIMARY_ELEMENT,
+    IDX_ELEM_AIR_TEMP,
     MAX_CHANNELS,
     PRIMARY_ELEMENT_IDX_MASK,
+    PRIMARY_ELEMENT_TP_LOST_MASK,
     THERMOSTAT_AIR_FLOOR,
     THERMOSTAT_AIR_ONLY,
     channel_display_name,
@@ -121,6 +124,53 @@ def _write_device_ranges(
             val = user_input.get(f"zone_{ch + 1}_{key}")
             if val is not None:
                 client.write_register(CAT_PACKED, idx, page=ch, val=int(round(val * 10)))
+
+
+def _read_live_thermostat_summary(client: WavinClient, channels: list[int]) -> str:
+    """Blocking: read element indices + temperatures from the device.
+
+    Groups channels by their shared element_idx (physical thermostat) and
+    returns a human-readable summary with live temperatures, e.g.:
+
+        - Thermostat #1: Zone 1, Zone 2, Zone 3 (shared ×3) — Air: 23.1 °C
+        - Thermostat #3: Zone 13, Zone 14        — Air: 28.4 °C / Floor: 27.3 °C — TP LOST
+    """
+    client.ensure_connected()
+
+    # First pass: group channels by element_idx and collect tp_lost flags.
+    element_channels: dict[int, list[int]] = {}
+    tp_lost_elements: set[int] = set()
+    for ch in channels:
+        prim = client.read_registers(CAT_CHANNELS, IDX_CH_PRIMARY_ELEMENT, page=ch, qty=1)
+        if prim:
+            element_idx = prim[0] & PRIMARY_ELEMENT_IDX_MASK
+            if element_idx > 0:
+                element_channels.setdefault(element_idx, []).append(ch)
+                if prim[0] & PRIMARY_ELEMENT_TP_LOST_MASK:
+                    tp_lost_elements.add(element_idx)
+
+    # Second pass: read temperatures once per unique element.
+    lines = []
+    for elem_idx, elem_channels in sorted(element_channels.items()):
+        zone_names = ", ".join(f"Zone {ch + 1}" for ch in elem_channels)
+        shared = f" (shared ×{len(elem_channels)})" if len(elem_channels) > 1 else ""
+
+        temps = client.read_registers(CAT_ELEMENTS, IDX_ELEM_AIR_TEMP, page=elem_idx - 1, qty=2)
+        air   = raw_to_temp(temps[0]) if temps else None
+        floor = raw_to_temp(temps[1]) if (temps and len(temps) > 1) else None
+
+        # Filter out physically impossible values (corrupt frames, absent sensors).
+        temp_parts = []
+        if air is not None and -20.0 <= air <= 80.0:
+            temp_parts.append(f"Air: {air:.1f} °C")
+        if floor is not None and -20.0 <= floor <= 80.0:
+            temp_parts.append(f"Floor: {floor:.1f} °C")
+        temp_str = " — " + " / ".join(temp_parts) if temp_parts else ""
+
+        lost = " — TP LOST" if elem_idx in tp_lost_elements else ""
+        lines.append(f"Thermostat #{elem_idx}: {zone_names}{shared}{temp_str}{lost}")
+
+    return "\n".join(f"- {l}" for l in lines) if lines else "No thermostats detected."
 
 
 # ── Config flow ───────────────────────────────────────────────────────────────
@@ -266,19 +316,18 @@ class WavinOptionsFlow(config_entries.OptionsFlow):
                 vol.Optional(f"zone_{ch + 1}_type", default=default_type)
             ] = _THERMOSTAT_TYPE_SELECTOR
 
-        # Build thermostat grouping summary from the stored element_map so
-        # the user knows which zones share a physical thermostat.
-        raw_map = self._entry.data.get(CONF_ELEMENT_MAP, {})
-        element_map: dict[int, list[int]] = {int(k): v for k, v in raw_map.items()}
-        if element_map:
-            lines = []
-            for elem_idx, channels in sorted(element_map.items()):
-                zone_names = ", ".join(f"Zone {ch + 1}" for ch in channels)
-                shared = " (shared)" if len(channels) > 1 else ""
-                lines.append(f"Thermostat #{elem_idx}: {zone_names}{shared}")
-            thermostats_summary = "\n".join(f"- {l}" for l in lines)
-        else:
-            thermostats_summary = "No thermostat map available — re-run setup to rebuild it."
+        # Read live thermostat grouping + temperatures directly from the device.
+        thermostats_summary = "Could not read live data from the device."
+        try:
+            from .coordinator import WavinCoordinator
+            coordinator: WavinCoordinator = self.hass.data[DOMAIN][self._entry.entry_id]
+            thermostats_summary = await self.hass.async_add_executor_job(
+                _read_live_thermostat_summary,
+                coordinator.client,
+                active_channels,
+            )
+        except Exception:
+            _LOGGER.warning("Could not read live thermostat data for options flow zones step.")
 
         return self.async_show_form(
             step_id="zones",
