@@ -60,8 +60,8 @@ QUERY_RESPONSE_WINDOW = 0.8   # seconds; total budget to receive a valid respons
 QUERY_CHUNK_TIMEOUT = 0.2     # seconds; recv() timeout inside the response window
 
 # ── Climate limits ────────────────────────────────────────────────────────────
-MIN_TEMP = 5.0
-MAX_TEMP = 35.0
+MIN_TEMP = 10.0
+MAX_TEMP = 60.0
 TEMP_STEP = 0.5
 
 # ── Coordinator data-dict keys ────────────────────────────────────────────────
