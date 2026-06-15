@@ -70,7 +70,6 @@ class WavinRangeNumber(CoordinatorEntity[WavinCoordinator], NumberEntity):
     _attr_native_step = TEMP_STEP
     _attr_mode = NumberMode.BOX
     _attr_has_entity_name = True
-    _attr_entity_registry_enabled_default = False
 
     def __init__(
         self,

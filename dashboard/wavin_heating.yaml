@@ -1,0 +1,77 @@
+# Wavin AHC 9000 — Underfloor Heating Dashboard
+#
+# How to use:
+#   Settings → Dashboards → Add Dashboard → give it a name
+#   Open it → ⋮ (3-dot menu) → Edit Dashboard → ⋮ → Raw Configuration Editor
+#   Paste this file's content and click Save.
+#
+# Entity IDs: verify yours in Settings → Devices & Services → Wavin AHC 9000
+#   or Developer Tools → States (filter by "wavin").
+# Default pattern: climate.wavin_ahc_9000_zone_1, etc.
+#
+# If you renamed zones in Configure, replace "zone_1" / "zone_2" / "zone_3"
+# with the slug of your custom names (spaces → underscores, lowercase).
+
+title: Underfloor Heating
+views:
+  - title: Heating
+    path: heating
+    icon: mdi:radiator
+    type: panel
+    cards:
+      - type: horizontal-stack
+        cards:
+
+          # ── Thermostat 1 ──────────────────────────────────────────────────
+          - type: vertical-stack
+            cards:
+              - type: thermostat
+                entity: climate.wavin_ahc_9000_zone_1
+                name: Zone 1
+              - type: entities
+                entities:
+                  - entity: binary_sensor.wavin_ahc_9000_zone_1_heating
+                    name: Heating active
+                    icon: mdi:valve
+                  - entity: sensor.wavin_ahc_9000_zone_1_air_temperature
+                    name: Air temperature
+                  - entity: number.wavin_ahc_9000_zone_1_comfort_temperature
+                    name: Comfort limit
+                  - entity: number.wavin_ahc_9000_zone_1_eco_temperature
+                    name: Eco limit
+
+          # ── Thermostat 2 ──────────────────────────────────────────────────
+          - type: vertical-stack
+            cards:
+              - type: thermostat
+                entity: climate.wavin_ahc_9000_zone_2
+                name: Zone 2
+              - type: entities
+                entities:
+                  - entity: binary_sensor.wavin_ahc_9000_zone_2_heating
+                    name: Heating active
+                    icon: mdi:valve
+                  - entity: sensor.wavin_ahc_9000_zone_2_air_temperature
+                    name: Air temperature
+                  - entity: number.wavin_ahc_9000_zone_2_comfort_temperature
+                    name: Comfort limit
+                  - entity: number.wavin_ahc_9000_zone_2_eco_temperature
+                    name: Eco limit
+
+          # ── Thermostat 3 ──────────────────────────────────────────────────
+          - type: vertical-stack
+            cards:
+              - type: thermostat
+                entity: climate.wavin_ahc_9000_zone_3
+                name: Zone 3
+              - type: entities
+                entities:
+                  - entity: binary_sensor.wavin_ahc_9000_zone_3_heating
+                    name: Heating active
+                    icon: mdi:valve
+                  - entity: sensor.wavin_ahc_9000_zone_3_air_temperature
+                    name: Air temperature
+                  - entity: number.wavin_ahc_9000_zone_3_comfort_temperature
+                    name: Comfort limit
+                  - entity: number.wavin_ahc_9000_zone_3_eco_temperature
+                    name: Eco limit

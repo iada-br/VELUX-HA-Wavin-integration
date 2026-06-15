@@ -42,19 +42,17 @@ async def async_setup_entry(
 
     for ch in coordinator.thermostat_channels:
         room = channel_display_name(entry.options, ch, entry.data)
-        # Disabled by default — current temperature is already visible on the
-        # climate entity. Enable in the entity registry for history graphs.
         entities.append(
             WavinTemperatureSensor(
                 coordinator, entry, ch, KEY_AIR_TEMP,
-                f"{room} Air Temperature", enabled=False,
+                f"{room} Air Temperature", enabled=True,
             )
         )
         if channel_thermostat_type(entry.options, ch, entry.data) == THERMOSTAT_AIR_FLOOR:
             entities.append(
                 WavinTemperatureSensor(
                     coordinator, entry, ch, KEY_FLOOR_TEMP,
-                    f"{room} Floor Temperature", enabled=False,
+                    f"{room} Floor Temperature", enabled=True,
                 )
             )
 
@@ -94,7 +92,7 @@ class WavinTemperatureSensor(CoordinatorEntity[WavinCoordinator], SensorEntity):
         self._attr_unique_id = (
             f"{entry.entry_id}_sensor_ch{channel}_{data_key}"
         )
-        self._attr_name = f"Zone {channel + 1} {label}"
+        self._attr_name = label
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
             name="Wavin AHC 9000",
