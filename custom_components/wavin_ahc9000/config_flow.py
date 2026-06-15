@@ -127,19 +127,15 @@ def _write_device_ranges(
 
 class WavinConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """
-    Three-step config flow for the Wavin AHC 9000 integration.
+    Single-step config flow for the Wavin AHC 9000 integration.
 
-    Step 1 (user):    Connection details + auto-scan.
-    Step 2 (confirm): Show detected zones, user confirms.
-    Step 3 (zones):   Assign room names and thermostat types.
+    Step 1 (user): Enter connection details. The controller is scanned
+    automatically and an entry is created with default zone names and types.
+    All zone customisation (names, thermostat types, temp ranges) is done
+    via the options flow after setup (press Configure on the integration card).
     """
 
     VERSION = 1
-
-    def __init__(self) -> None:
-        self._connection_data: dict[str, Any] = {}
-        self._active_channels: list[int] = []
-        self._element_map: dict[int, list[int]] = {}
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -164,80 +160,33 @@ class WavinConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     f"{user_input[CONF_HOST]}:{user_input[CONF_PORT]}"
                 )
                 self._abort_if_unique_id_configured()
-                self._connection_data = user_input
-                self._active_channels = result["active_channels"]
-                self._element_map = result["element_map"]
-                return await self.async_step_confirm()
+
+                active_channels: list[int] = result["active_channels"]
+                element_map: dict[int, list[int]] = result["element_map"]
+
+                _LOGGER.info(
+                    "Wavin AHC 9000 scan complete: %d zone(s) across %d thermostat(s). "
+                    "Element map: %s",
+                    len(active_channels),
+                    len(element_map),
+                    {f"#{k}": [f"Zone {ch+1}" for ch in v] for k, v in sorted(element_map.items())},
+                )
+
+                return self.async_create_entry(
+                    title=f"Wavin AHC 9000 ({user_input[CONF_HOST]})",
+                    data={
+                        **user_input,
+                        CONF_ACTIVE_CHANNELS: active_channels,
+                        CONF_ELEMENT_MAP: {str(k): v for k, v in element_map.items()},
+                        CONF_CHANNEL_NAMES: {str(ch): f"Zone {ch + 1}" for ch in active_channels},
+                        CONF_CHANNEL_THERMOSTAT_TYPES: {str(ch): THERMOSTAT_AIR_ONLY for ch in active_channels},
+                    },
+                )
 
         return self.async_show_form(
             step_id="user",
             data_schema=STEP_USER_SCHEMA,
             errors=errors,
-        )
-
-    async def async_step_confirm(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
-        if user_input is not None:
-            return await self.async_step_zones()
-
-        if self._active_channels:
-            lines = []
-            for elem_idx, channels in sorted(self._element_map.items()):
-                zone_names = ", ".join(f"Zone {ch + 1}" for ch in channels)
-                shared = " ★ shared thermostat" if len(channels) > 1 else ""
-                lines.append(f"Thermostat #{elem_idx}: {zone_names}{shared}")
-            summary = (
-                f"{len(self._active_channels)} zone(s) detected across"
-                f" {len(self._element_map)} thermostat(s):\n"
-                + "\n".join(f"- {line}" for line in lines)
-            )
-        else:
-            summary = "No active zones detected. Check wiring and try again."
-
-        return self.async_show_form(
-            step_id="confirm",
-            description_placeholders={"zones_summary": summary},
-            data_schema=vol.Schema({}),
-        )
-
-    async def async_step_zones(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
-        """Step 3 — room names and thermostat types."""
-        if user_input is not None:
-            names = {
-                str(ch): user_input.get(f"zone_{ch + 1}_name", f"Zone {ch + 1}")
-                for ch in self._active_channels
-            }
-            types = {
-                str(ch): user_input.get(f"zone_{ch + 1}_type", THERMOSTAT_AIR_ONLY)
-                for ch in self._active_channels
-            }
-            return self.async_create_entry(
-                title=f"Wavin AHC 9000 ({self._connection_data[CONF_HOST]})",
-                data={
-                    **self._connection_data,
-                    CONF_ACTIVE_CHANNELS: self._active_channels,
-                    CONF_ELEMENT_MAP: {str(k): v for k, v in self._element_map.items()},
-                    CONF_CHANNEL_NAMES: names,
-                    CONF_CHANNEL_THERMOSTAT_TYPES: types,
-                },
-            )
-
-        schema_fields: dict = {}
-        for ch in self._active_channels:
-            schema_fields[
-                vol.Optional(f"zone_{ch + 1}_name", default=f"Zone {ch + 1}")
-            ] = str
-            schema_fields[
-                vol.Optional(f"zone_{ch + 1}_type", default=THERMOSTAT_AIR_ONLY)
-            ] = _THERMOSTAT_TYPE_SELECTOR
-
-        return self.async_show_form(
-            step_id="zones",
-            data_schema=vol.Schema(schema_fields),
-            description_placeholders={"zone_count": str(len(self._active_channels))},
         )
 
     @staticmethod
@@ -317,9 +266,24 @@ class WavinOptionsFlow(config_entries.OptionsFlow):
                 vol.Optional(f"zone_{ch + 1}_type", default=default_type)
             ] = _THERMOSTAT_TYPE_SELECTOR
 
+        # Build thermostat grouping summary from the stored element_map so
+        # the user knows which zones share a physical thermostat.
+        raw_map = self._entry.data.get(CONF_ELEMENT_MAP, {})
+        element_map: dict[int, list[int]] = {int(k): v for k, v in raw_map.items()}
+        if element_map:
+            lines = []
+            for elem_idx, channels in sorted(element_map.items()):
+                zone_names = ", ".join(f"Zone {ch + 1}" for ch in channels)
+                shared = " (shared)" if len(channels) > 1 else ""
+                lines.append(f"Thermostat #{elem_idx}: {zone_names}{shared}")
+            thermostats_summary = "\n".join(f"- {l}" for l in lines)
+        else:
+            thermostats_summary = "No thermostat map available — re-run setup to rebuild it."
+
         return self.async_show_form(
             step_id="zones",
             data_schema=vol.Schema(schema_fields),
+            description_placeholders={"thermostats_summary": thermostats_summary},
         )
 
     async def async_step_temp_ranges(
