@@ -182,6 +182,30 @@ def read_measurements(c: Client, debug: bool = False) -> dict:
     return result
 
 
+def print_thermostats(channels: list) -> None:
+    """Print a thermostat-centric view: one row per unique physical thermostat."""
+    # Group zones by element_idx
+    by_elem: dict[int, list] = {}
+    for z in channels:
+        by_elem.setdefault(z["element"], []).append(z)
+
+    print()
+    print("  THERMOSTATS (physical sensors)")
+    print("  " + "-" * 74)
+    print(f"  {'Therm':<7} {'Zones controlled':<28} {'Air':>8}  {'Floor':>8}  {'Status'}")
+    print("  " + "-" * 74)
+    for elem_idx, zones in sorted(by_elem.items()):
+        zone_names = ", ".join(f"Zone {z['ch'] + 1}" for z in zones)
+        air   = zones[0]["air"]
+        floor = zones[0]["floor"]
+        tp_lost = any(z["tp_lost"] for z in zones)
+        status = "TP LOST" if tp_lost else ("shared ×%d" % len(zones) if len(zones) > 1 else "")
+        print(
+            f"  #{elem_idx:<6} {zone_names:<28}  {temp_str(air)}  {temp_str(floor)}  {status}"
+        )
+    print("  " + "-" * 74)
+
+
 def print_table(data: dict, host: str, port: int) -> None:
     os.system("cls" if os.name == "nt" else "clear")
 
@@ -216,6 +240,9 @@ def print_table(data: dict, host: str, port: int) -> None:
     print("-" * 78)
     print(f"  Last update: {time.strftime('%H:%M:%S')}   "
           f"Active zones: {len(channels)}/{MAX_CHANNELS}")
+
+    if channels:
+        print_thermostats(channels)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
