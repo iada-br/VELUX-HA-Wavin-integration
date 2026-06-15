@@ -103,6 +103,14 @@ class Client:
         bc = raw[2]
         if len(raw) < 3 + bc + 2:
             return None
+
+        # Verify response CRC — discard frames with bit errors or stale data.
+        body = raw[:3 + bc]
+        if _crc16(body) != raw[3 + bc: 3 + bc + 2]:
+            if debug:
+                print(f"  CRC mismatch — frame discarded")
+            return None
+
         n = bc // 2
         # Slice exactly n*2 bytes so struct.unpack is always given the right size
         # even when bc is odd (device padding) or mismatched.
@@ -182,6 +190,71 @@ def read_measurements(c: Client, debug: bool = False) -> dict:
     return result
 
 
+def read_averaged(c: Client, samples: int = 4, debug: bool = False) -> dict:
+    """Take `samples` consecutive readings and average temperatures per channel.
+
+    - Temperatures (air, floor, desired): mean of all non-None values.
+    - Valve / tp_lost: taken from the most recent sample.
+    - Element index, shared flag: constant across samples.
+    """
+    all_data: list[dict] = []
+    for i in range(samples):
+        data = read_measurements(c, debug=debug)
+        all_data.append(data)
+        if i < samples - 1:
+            time.sleep(0.3)  # brief gap so the device can respond cleanly
+
+    if not all_data:
+        return {"channels": [], "samples": 0}
+
+    # Collect readings per channel across all samples.
+    # Element indices are reassigned each TCP session so they should be stable
+    # within a single run, but filter out any sample where the index drifted.
+    by_ch: dict[int, list[dict]] = {}
+    for snap in all_data:
+        for z in snap.get("channels", []):
+            by_ch.setdefault(z["ch"], []).append(z)
+
+    def _avg(readings: list[dict], key: str) -> Optional[float]:
+        # Only include readings within a physically plausible range.
+        # Values outside this window are corrupt frames or sensor faults.
+        TEMP_MIN, TEMP_MAX = -20.0, 80.0
+        vals = [
+            r[key] for r in readings
+            if r.get(key) is not None and TEMP_MIN <= r[key] <= TEMP_MAX
+        ]
+        return round(sum(vals) / len(vals), 1) if vals else None
+
+    merged_channels = []
+    for ch, readings in sorted(by_ch.items()):
+        # Only average samples that share the majority element_idx for this channel.
+        # If the index shifted mid-session, discard the outlier samples.
+        from collections import Counter
+        dominant_elem = Counter(r["element"] for r in readings).most_common(1)[0][0]
+        stable = [r for r in readings if r["element"] == dominant_elem]
+        last = stable[-1]
+        merged_channels.append({
+            "ch":      ch,
+            "element": dominant_elem,
+            "shared":  last.get("shared", False),
+            "air":     _avg(stable, "air"),
+            "floor":   _avg(stable, "floor"),
+            "desired": _avg(stable, "desired"),
+            "valve":   last["valve"],
+            "tp_lost": last["tp_lost"],
+            "n":       len(stable),
+        })
+
+    last_snap = all_data[-1]
+    return {
+        "hw_ver":   last_snap.get("hw_ver"),
+        "sw_ver":   last_snap.get("sw_ver"),
+        "dev_name": last_snap.get("dev_name"),
+        "channels": merged_channels,
+        "samples":  samples,
+    }
+
+
 def print_thermostats(channels: list) -> None:
     """Print a thermostat-centric view: one row per unique physical thermostat."""
     # Group zones by element_idx
@@ -237,9 +310,11 @@ def print_table(data: dict, host: str, port: int) -> None:
                 f"  {shared_note}"
             )
 
+    samples = data.get("samples", 1)
     print("-" * 78)
     print(f"  Last update: {time.strftime('%H:%M:%S')}   "
-          f"Active zones: {len(channels)}/{MAX_CHANNELS}")
+          f"Active zones: {len(channels)}/{MAX_CHANNELS}   "
+          f"Averaged over: {samples} sample(s)")
 
     if channels:
         print_thermostats(channels)
@@ -255,13 +330,14 @@ def main() -> None:
     parser.add_argument("--watch",    action="store_true",   help="Refresh every N s (Ctrl+C to stop)")
     parser.add_argument("--interval", default=5,             type=int, help="Watch interval in seconds")
     parser.add_argument("--debug",    action="store_true",   help="Print raw TX/RX bytes for every register read")
+    parser.add_argument("--samples",  default=4, type=int,  help="Number of readings to average (default: 4)")
     args = parser.parse_args()
 
     while True:
         c = Client(args.host, args.port, args.slave)
         try:
             c.connect()
-            data = read_measurements(c, debug=args.debug)
+            data = read_averaged(c, samples=args.samples, debug=args.debug)
             print_table(data, args.host, args.port)
         except (OSError, socket.timeout) as e:
             print(f"Connection error: {e}")

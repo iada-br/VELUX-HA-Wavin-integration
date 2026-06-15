@@ -75,8 +75,10 @@ class WavinCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self._entry = entry
         self.active_channels: list[int] = entry.data[CONF_ACTIVE_CHANNELS]
-        # element_map: element_idx (1-based) → list of channel indices sharing that thermostat.
-        # JSON round-trips dict keys as strings, so we restore them to int here.
+        # element_map from config is a setup-time snapshot only — element indices
+        # are reassigned by the device each TCP session, so it must not be used
+        # for register-read decisions during polling. It is kept for the options
+        # flow UI display only.
         raw_map = entry.data.get(CONF_ELEMENT_MAP, {})
         self.element_map: dict[int, list[int]] = {int(k): v for k, v in raw_map.items()}
         self.client = WavinClient(
@@ -131,20 +133,11 @@ class WavinCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.client.ensure_connected()
         data: dict[str, Any] = {}
 
-        # Pre-compute read qty per element: 2 registers if any channel on that
-        # element has a floor sensor, so a shared read covers both channels.
-        element_qty: dict[int, int] = {
-            elem_idx: (
-                2 if any(
-                    channel_thermostat_type(self._entry.options, ch, self._entry.data)
-                    == THERMOSTAT_AIR_FLOOR
-                    for ch in channels
-                ) else 1
-            )
-            for elem_idx, channels in self.element_map.items()
-        }
-        # Cache raw temp reads by element_idx so shared thermostats are only
-        # queried once per poll cycle, not once per zone.
+        # Always read qty=2 (air + floor) on first encounter of an element_idx.
+        # Element indices are reassigned each TCP session so the stored element_map
+        # cannot be trusted for qty decisions. Reading 2 registers costs one extra
+        # word per unique thermostat but guarantees floor data is available for any
+        # zone that needs it, regardless of which zone is seen first in the loop.
         temps_cache: dict[int, list | None] = {}
 
         for ch in self.active_channels:
@@ -191,10 +184,9 @@ class WavinCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             if element_idx > 0:
                 if element_idx not in temps_cache:
-                    qty = element_qty.get(element_idx, 2 if has_floor else 1)
                     temps_cache[element_idx] = self.client.read_registers(
                         CAT_ELEMENTS, IDX_ELEM_AIR_TEMP,
-                        page=element_idx - 1, qty=qty,
+                        page=element_idx - 1, qty=2,
                     )
                 temps = temps_cache[element_idx]
                 data[ch_key(ch, KEY_AIR_TEMP)] = (
