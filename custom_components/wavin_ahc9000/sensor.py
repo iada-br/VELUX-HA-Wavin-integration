@@ -40,20 +40,21 @@ async def async_setup_entry(
     coordinator: WavinCoordinator = hass.data[DOMAIN][entry.entry_id]
     entities: list[SensorEntity] = []
 
-    for ch in coordinator.active_channels:
+    for ch in coordinator.thermostat_channels:
         room = channel_display_name(entry.options, ch, entry.data)
+        # Disabled by default — current temperature is already visible on the
+        # climate entity. Enable in the entity registry for history graphs.
         entities.append(
             WavinTemperatureSensor(
                 coordinator, entry, ch, KEY_AIR_TEMP,
-                f"{room} Air Temperature", enabled=True,
+                f"{room} Air Temperature", enabled=False,
             )
         )
-        # Floor sensor only created when the channel is configured as air+floor type.
         if channel_thermostat_type(entry.options, ch, entry.data) == THERMOSTAT_AIR_FLOOR:
             entities.append(
                 WavinTemperatureSensor(
                     coordinator, entry, ch, KEY_FLOOR_TEMP,
-                    f"{room} Floor Temperature", enabled=True,
+                    f"{room} Floor Temperature", enabled=False,
                 )
             )
 

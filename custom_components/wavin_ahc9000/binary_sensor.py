@@ -11,7 +11,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, KEY_VALVE_OPEN, ch_key
+from .const import DOMAIN, KEY_VALVE_OPEN, ch_key, channel_display_name
 from .coordinator import WavinCoordinator
 
 
@@ -23,8 +23,9 @@ async def async_setup_entry(
     coordinator: WavinCoordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities(
         WavinValveSensor(coordinator, entry, ch)
-        for ch in coordinator.active_channels
+        for ch in coordinator.thermostat_channels
     )
+
 
 
 class WavinValveSensor(CoordinatorEntity[WavinCoordinator], BinarySensorEntity):
@@ -42,7 +43,8 @@ class WavinValveSensor(CoordinatorEntity[WavinCoordinator], BinarySensorEntity):
         super().__init__(coordinator)
         self._channel = channel
         self._attr_unique_id = f"{entry.entry_id}_valve_ch{channel}"
-        self._attr_name = f"Zone {channel + 1} Valve"
+        room = channel_display_name(entry.options, channel, entry.data)
+        self._attr_name = f"{room} Heating"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
             name="Wavin AHC 9000",

@@ -20,6 +20,7 @@ from .const import (
     CAT_CHANNELS,
     CONF_ACTIVE_CHANNELS,
     CONF_ELEMENT_MAP,
+    CONF_THERMOSTAT_GROUPS,
     CONF_SCAN_INTERVAL,
     CONF_SLAVE_ID,
     DEFAULT_SCAN_INTERVAL,
@@ -75,12 +76,25 @@ class WavinCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self._entry = entry
         self.active_channels: list[int] = entry.data[CONF_ACTIVE_CHANNELS]
-        # element_map from config is a setup-time snapshot only — element indices
-        # are reassigned by the device each TCP session, so it must not be used
-        # for register-read decisions during polling. It is kept for the options
-        # flow UI display only.
+
+        # element_map is a setup-time snapshot only — element indices are
+        # reassigned by the device each TCP session. Kept for UI display only.
         raw_map = entry.data.get(CONF_ELEMENT_MAP, {})
         self.element_map: dict[int, list[int]] = {int(k): v for k, v in raw_map.items()}
+
+        # thermostat_groups: primary_ch → all channel indices sharing that thermostat.
+        # Determines which channels share one climate entity and receive the same
+        # setpoint when the user changes the target temperature.
+        # Fallback: each channel is its own group (old config entries without this key).
+        raw_groups = entry.data.get(CONF_THERMOSTAT_GROUPS, {})
+        self.thermostat_groups: dict[int, list[int]] = (
+            {int(k): v for k, v in raw_groups.items()}
+            if raw_groups
+            else {ch: [ch] for ch in self.active_channels}
+        )
+        self.thermostat_channels: list[int] = sorted(self.thermostat_groups.keys())
+        # Flag: need a live scan to populate missing thermostat_groups (old config entry).
+        self._group_scan_pending: bool = not bool(raw_groups)
         self.client = WavinClient(
             host=entry.data[CONF_HOST],
             port=entry.data[CONF_PORT],
@@ -102,7 +116,7 @@ class WavinCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _async_update_data(self) -> dict[str, Any]:
         """Called every update_interval. Offloads blocking I/O to executor."""
         try:
-            return await self.hass.async_add_executor_job(self._fetch_all)
+            result = await self.hass.async_add_executor_job(self._fetch_all)
         except CannotConnect as exc:
             raise UpdateFailed(
                 f"Cannot connect to Wavin AHC 9000 at"
@@ -112,6 +126,33 @@ class WavinCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed(
                 f"Unexpected error reading Wavin AHC 9000: {exc}"
             ) from exc
+
+        live_groups: dict[int, list[int]] = result.pop("__live_groups__", {})
+
+        # Auto-discover thermostat groups when config entry pre-dates this feature.
+        # On first successful poll we have live element_idx data; use it to build
+        # groups, persist them to the config entry, then reload so the correct
+        # (grouped) entity count takes effect without any user action.
+        if self._group_scan_pending and live_groups:
+            self._group_scan_pending = False
+            self.thermostat_groups = live_groups
+            self.thermostat_channels = sorted(live_groups.keys())
+            self.hass.config_entries.async_update_entry(
+                self._entry,
+                data={
+                    **self._entry.data,
+                    CONF_THERMOSTAT_GROUPS: {str(k): v for k, v in live_groups.items()},
+                },
+            )
+            _LOGGER.info(
+                "Wavin AHC 9000: auto-discovered %d thermostat group(s) — reloading to apply.",
+                len(live_groups),
+            )
+            self.hass.async_create_task(
+                self.hass.config_entries.async_reload(self._entry.entry_id)
+            )
+
+        return result
 
     # ── Blocking fetch (runs in executor thread) ──────────────────────────────
 
@@ -139,6 +180,8 @@ class WavinCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # word per unique thermostat but guarantees floor data is available for any
         # zone that needs it, regardless of which zone is seen first in the loop.
         temps_cache: dict[int, list | None] = {}
+        # Collect live grouping (element_idx → channels) for auto-discovery.
+        live_elem_ch: dict[int, list[int]] = {}
 
         for ch in self.active_channels:
             # ── Thermostat-lost flag + element index ───────────────────────
@@ -149,6 +192,8 @@ class WavinCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             data[ch_key(ch, KEY_TP_LOST)] = (
                 bool(prim[0] & PRIMARY_ELEMENT_TP_LOST_MASK) if prim else True
             )
+            if element_idx > 0:
+                live_elem_ch.setdefault(element_idx, []).append(ch)
 
             # ── Valve / output status ──────────────────────────────────────
             timer = self.client.read_registers(
@@ -199,6 +244,23 @@ class WavinCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 data[ch_key(ch, KEY_AIR_TEMP)] = None
                 data[ch_key(ch, KEY_FLOOR_TEMP)] = None
 
+        # Aggregate valve and tp_lost per thermostat group.
+        # For shared thermostats the entity should report "heating" if ANY of
+        # its zones has an open valve, and "lost" if ANY channel is lost.
+        for primary_ch, group_channels in self.thermostat_groups.items():
+            if len(group_channels) > 1:
+                data[ch_key(primary_ch, KEY_VALVE_OPEN)] = any(
+                    data.get(ch_key(ch, KEY_VALVE_OPEN), False) for ch in group_channels
+                )
+                data[ch_key(primary_ch, KEY_TP_LOST)] = any(
+                    data.get(ch_key(ch, KEY_TP_LOST), False) for ch in group_channels
+                )
+
+        # Pass live grouping back for auto-discovery in _async_update_data.
+        data["__live_groups__"] = {
+            min(chs): sorted(chs) for chs in live_elem_ch.values()
+        }
+
         return data
 
     # ── Temperature write ─────────────────────────────────────────────────────
@@ -206,49 +268,48 @@ class WavinCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_set_temperature(
         self, channel: int, temp_celsius: float
     ) -> None:
-        """Write a new setpoint to the given zone (0-indexed)."""
+        """Write a new setpoint to all channels in the thermostat group."""
         temp_celsius = max(MIN_TEMP, min(MAX_TEMP, temp_celsius))
         raw_val = int(round(temp_celsius * 10))
+        group = self.thermostat_groups.get(channel, [channel])
 
-        def _write() -> bool:
+        def _write() -> None:
             self.client.ensure_connected()
-            return self.client.write_register(
-                CAT_PACKED, IDX_CH_MANUAL_TEMP, page=channel, val=raw_val
-            )
+            for ch in group:
+                ok = self.client.write_register(CAT_PACKED, IDX_CH_MANUAL_TEMP, page=ch, val=raw_val)
+                if not ok:
+                    _LOGGER.warning(
+                        "Zone %d set_temperature %.1f °C: no echo (write may still have taken effect)",
+                        ch + 1, temp_celsius,
+                    )
 
-        success = await self.hass.async_add_executor_job(_write)
-        if not success:
-            _LOGGER.warning(
-                "Zone %d set_temperature %.1f °C: no echo received"
-                " (write may still have taken effect; next poll will confirm)",
-                channel + 1, temp_celsius,
-            )
+        await self.hass.async_add_executor_job(_write)
         await self.async_request_refresh()
 
     async def async_set_comfort_temp(self, channel: int, temp_celsius: float) -> None:
-        """Write the comfort (upper) temperature limit for a zone."""
+        """Write the comfort (upper) limit to all channels in the thermostat group."""
         temp_celsius = max(MIN_TEMP, min(MAX_TEMP, temp_celsius))
         raw_val = int(round(temp_celsius * 10))
+        group = self.thermostat_groups.get(channel, [channel])
 
-        def _write() -> bool:
+        def _write() -> None:
             self.client.ensure_connected()
-            return self.client.write_register(
-                CAT_PACKED, IDX_CH_COMFORT_TEMP, page=channel, val=raw_val
-            )
+            for ch in group:
+                self.client.write_register(CAT_PACKED, IDX_CH_COMFORT_TEMP, page=ch, val=raw_val)
 
         await self.hass.async_add_executor_job(_write)
         await self.async_request_refresh()
 
     async def async_set_eco_temp(self, channel: int, temp_celsius: float) -> None:
-        """Write the eco (lower) temperature limit for a zone."""
+        """Write the eco (lower) limit to all channels in the thermostat group."""
         temp_celsius = max(MIN_TEMP, min(MAX_TEMP, temp_celsius))
         raw_val = int(round(temp_celsius * 10))
+        group = self.thermostat_groups.get(channel, [channel])
 
-        def _write() -> bool:
+        def _write() -> None:
             self.client.ensure_connected()
-            return self.client.write_register(
-                CAT_PACKED, IDX_CH_ECO_TEMP, page=channel, val=raw_val
-            )
+            for ch in group:
+                self.client.write_register(CAT_PACKED, IDX_CH_ECO_TEMP, page=ch, val=raw_val)
 
         await self.hass.async_add_executor_job(_write)
         await self.async_request_refresh()

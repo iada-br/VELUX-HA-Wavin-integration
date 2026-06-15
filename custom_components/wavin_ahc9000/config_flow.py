@@ -23,6 +23,7 @@ from .const import (
     CONF_CHANNEL_NAMES,
     CONF_CHANNEL_THERMOSTAT_TYPES,
     CONF_ELEMENT_MAP,
+    CONF_THERMOSTAT_GROUPS,
     CONF_SCAN_INTERVAL,
     CONF_SLAVE_ID,
     DEFAULT_COMFORT_TEMP,
@@ -95,7 +96,19 @@ def _scan_device(host: str, port: int, slave_id: int) -> dict:
                 if element_idx > 0:
                     active.append(ch)
                     element_map.setdefault(element_idx, []).append(ch)
-        return {"device_info": device_info, "active_channels": active, "element_map": element_map}
+        # Group channels by thermostat: primary_ch (lowest in group) → all channels.
+        # This is stored as the stable thermostat identity even though element_idx
+        # is reassigned each TCP session.
+        thermostat_groups: dict[int, list[int]] = {
+            min(channels): sorted(channels)
+            for channels in element_map.values()
+        }
+        return {
+            "device_info": device_info,
+            "active_channels": active,
+            "element_map": element_map,
+            "thermostat_groups": thermostat_groups,
+        }
     finally:
         client.disconnect()
 
@@ -213,13 +226,15 @@ class WavinConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
                 active_channels: list[int] = result["active_channels"]
                 element_map: dict[int, list[int]] = result["element_map"]
+                thermostat_groups: dict[int, list[int]] = result["thermostat_groups"]
+                primary_channels: list[int] = sorted(thermostat_groups.keys())
 
                 _LOGGER.info(
-                    "Wavin AHC 9000 scan complete: %d zone(s) across %d thermostat(s). "
-                    "Element map: %s",
+                    "Wavin AHC 9000 scan complete: %d zone(s), %d thermostat(s). Groups: %s",
                     len(active_channels),
-                    len(element_map),
-                    {f"#{k}": [f"Zone {ch+1}" for ch in v] for k, v in sorted(element_map.items())},
+                    len(thermostat_groups),
+                    {f"Th#{p}": [f"Zone {ch+1}" for ch in chs]
+                     for p, chs in sorted(thermostat_groups.items())},
                 )
 
                 return self.async_create_entry(
@@ -228,8 +243,10 @@ class WavinConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         **user_input,
                         CONF_ACTIVE_CHANNELS: active_channels,
                         CONF_ELEMENT_MAP: {str(k): v for k, v in element_map.items()},
-                        CONF_CHANNEL_NAMES: {str(ch): f"Zone {ch + 1}" for ch in active_channels},
-                        CONF_CHANNEL_THERMOSTAT_TYPES: {str(ch): THERMOSTAT_AIR_ONLY for ch in active_channels},
+                        CONF_THERMOSTAT_GROUPS: {str(k): v for k, v in thermostat_groups.items()},
+                        # Names and types keyed by primary_ch — one entry per thermostat.
+                        CONF_CHANNEL_NAMES: {str(p): f"Zone {p + 1}" for p in primary_channels},
+                        CONF_CHANNEL_THERMOSTAT_TYPES: {str(p): THERMOSTAT_AIR_ONLY for p in primary_channels},
                     },
                 )
 
@@ -289,31 +306,36 @@ class WavinOptionsFlow(config_entries.OptionsFlow):
     async def async_step_zones(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Room names and thermostat types."""
-        active_channels: list[int] = self._entry.data.get(CONF_ACTIVE_CHANNELS, [])
+        """Thermostat names and sensor types — one row per physical thermostat."""
+        raw_groups = self._entry.data.get(CONF_THERMOSTAT_GROUPS, {})
+        # Primary channels = one per physical thermostat (fallback: all active channels).
+        if raw_groups:
+            primary_channels: list[int] = sorted(int(k) for k in raw_groups)
+        else:
+            primary_channels = self._entry.data.get(CONF_ACTIVE_CHANNELS, [])
 
         if user_input is not None:
             names = {
-                str(ch): user_input.get(f"zone_{ch + 1}_name", f"Zone {ch + 1}")
-                for ch in active_channels
+                str(p): user_input.get(f"zone_{p + 1}_name", f"Zone {p + 1}")
+                for p in primary_channels
             }
             types = {
-                str(ch): user_input.get(f"zone_{ch + 1}_type", THERMOSTAT_AIR_ONLY)
-                for ch in active_channels
+                str(p): user_input.get(f"zone_{p + 1}_type", THERMOSTAT_AIR_ONLY)
+                for p in primary_channels
             }
             self._pending[CONF_CHANNEL_NAMES] = names
             self._pending[CONF_CHANNEL_THERMOSTAT_TYPES] = types
             return await self.async_step_temp_ranges()
 
         schema_fields: dict = {}
-        for ch in active_channels:
-            default_name = channel_display_name(self._entry.options, ch, self._entry.data)
-            default_type = channel_thermostat_type(self._entry.options, ch, self._entry.data)
+        for p in primary_channels:
+            default_name = channel_display_name(self._entry.options, p, self._entry.data)
+            default_type = channel_thermostat_type(self._entry.options, p, self._entry.data)
             schema_fields[
-                vol.Optional(f"zone_{ch + 1}_name", default=default_name)
+                vol.Optional(f"zone_{p + 1}_name", default=default_name)
             ] = str
             schema_fields[
-                vol.Optional(f"zone_{ch + 1}_type", default=default_type)
+                vol.Optional(f"zone_{p + 1}_type", default=default_type)
             ] = _THERMOSTAT_TYPE_SELECTOR
 
         # Read live thermostat grouping + temperatures directly from the device.
@@ -324,7 +346,7 @@ class WavinOptionsFlow(config_entries.OptionsFlow):
             thermostats_summary = await self.hass.async_add_executor_job(
                 _read_live_thermostat_summary,
                 coordinator.client,
-                active_channels,
+                self._entry.data.get(CONF_ACTIVE_CHANNELS, []),
             )
         except Exception:
             _LOGGER.warning("Could not read live thermostat data for options flow zones step.")

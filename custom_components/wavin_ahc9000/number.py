@@ -33,7 +33,7 @@ async def async_setup_entry(
     coordinator: WavinCoordinator = hass.data[DOMAIN][entry.entry_id]
     entities: list[NumberEntity] = []
 
-    for ch in coordinator.active_channels:
+    for ch in coordinator.thermostat_channels:
         room = channel_display_name(entry.options, ch, entry.data)
         entities.append(
             WavinRangeNumber(
@@ -70,6 +70,7 @@ class WavinRangeNumber(CoordinatorEntity[WavinCoordinator], NumberEntity):
     _attr_native_step = TEMP_STEP
     _attr_mode = NumberMode.BOX
     _attr_has_entity_name = True
+    _attr_entity_registry_enabled_default = False
 
     def __init__(
         self,
