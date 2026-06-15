@@ -77,8 +77,8 @@
         }
       },
       "temp_ranges": {
-        "title": "Temperature Limits per Zone",
-        "description": "Set the comfort (upper) and eco (lower) temperature limits for each zone. Current values are read live from the device and written back when you save.",
+        "title": "Temperature Limits",
+        "description": "Set the comfort (upper) and eco (lower) temperature limits for each thermostat ({zone_count} detected). These limits apply to all loops sharing that thermostat. Values are read live from the device and written back on save.",
         "data": {
           "zone_1_comfort": "Zone 1 — Comfort temperature (°C)",
           "zone_1_eco": "Zone 1 — Eco temperature (°C)",

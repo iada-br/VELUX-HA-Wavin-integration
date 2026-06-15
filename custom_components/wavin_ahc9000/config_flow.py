@@ -139,18 +139,22 @@ def _write_device_ranges(
                 client.write_register(CAT_PACKED, idx, page=ch, val=int(round(val * 10)))
 
 
-def _read_live_thermostat_summary(client: WavinClient, channels: list[int]) -> str:
+def _read_live_thermostat_summary(
+    client: WavinClient,
+    channels: list[int],
+    channel_names: dict[int, str] | None = None,
+) -> str:
     """Blocking: read element indices + temperatures from the device.
 
     Groups channels by their shared element_idx (physical thermostat) and
-    returns a human-readable summary with live temperatures, e.g.:
+    returns a human-readable summary that includes the HA entity slug, e.g.:
 
-        - Thermostat #1: Zone 1, Zone 2, Zone 3 (shared ×3) — Air: 23.1 °C
-        - Thermostat #3: Zone 13, Zone 14        — Air: 28.4 °C / Floor: 27.3 °C — TP LOST
+        - **Zone 1** (entity: `zone_1`) — 6 loops — Air: 23.1 °C
+        - **Zone 7** (entity: `zone_7`) — 5 loops — Air: 21.3 °C
+        - **Zone 13** (entity: `zone_13`) — 4 loops — Air: 19.8 °C — TP LOST
     """
     client.ensure_connected()
 
-    # First pass: group channels by element_idx and collect tp_lost flags.
     element_channels: dict[int, list[int]] = {}
     tp_lost_elements: set[int] = set()
     for ch in channels:
@@ -162,17 +166,18 @@ def _read_live_thermostat_summary(client: WavinClient, channels: list[int]) -> s
                 if prim[0] & PRIMARY_ELEMENT_TP_LOST_MASK:
                     tp_lost_elements.add(element_idx)
 
-    # Second pass: read temperatures once per unique element.
     lines = []
     for elem_idx, elem_channels in sorted(element_channels.items()):
-        zone_names = ", ".join(f"Zone {ch + 1}" for ch in elem_channels)
-        shared = f" (shared ×{len(elem_channels)})" if len(elem_channels) > 1 else ""
+        primary_ch = min(elem_channels)
+        name = (channel_names or {}).get(primary_ch, f"Zone {primary_ch + 1}")
+        slug = f"zone_{primary_ch + 1}"
+        n = len(elem_channels)
+        loops = f" — {n} loop{'s' if n != 1 else ''}" if n > 1 else ""
 
         temps = client.read_registers(CAT_ELEMENTS, IDX_ELEM_AIR_TEMP, page=elem_idx - 1, qty=2)
         air   = raw_to_temp(temps[0]) if temps else None
         floor = raw_to_temp(temps[1]) if (temps and len(temps) > 1) else None
 
-        # Filter out physically impossible values (corrupt frames, absent sensors).
         temp_parts = []
         if air is not None and -20.0 <= air <= 80.0:
             temp_parts.append(f"Air: {air:.1f} °C")
@@ -181,7 +186,7 @@ def _read_live_thermostat_summary(client: WavinClient, channels: list[int]) -> s
         temp_str = " — " + " / ".join(temp_parts) if temp_parts else ""
 
         lost = " — TP LOST" if elem_idx in tp_lost_elements else ""
-        lines.append(f"Thermostat #{elem_idx}: {zone_names}{shared}{temp_str}{lost}")
+        lines.append(f"**{name}** (entity: `{slug}`){loops}{temp_str}{lost}")
 
     return "\n".join(f"- {l}" for l in lines) if lines else "No thermostats detected."
 
@@ -339,6 +344,13 @@ class WavinOptionsFlow(config_entries.OptionsFlow):
             ] = _THERMOSTAT_TYPE_SELECTOR
 
         # Read live thermostat grouping + temperatures directly from the device.
+        # Merge stored names so entity slugs in the summary match what HA will show.
+        stored_names: dict[int, str] = {
+            int(k): v for k, v in {
+                **self._entry.data.get(CONF_CHANNEL_NAMES, {}),
+                **self._entry.options.get(CONF_CHANNEL_NAMES, {}),
+            }.items()
+        }
         thermostats_summary = "Could not read live data from the device."
         try:
             from .coordinator import WavinCoordinator
@@ -347,6 +359,7 @@ class WavinOptionsFlow(config_entries.OptionsFlow):
                 _read_live_thermostat_summary,
                 coordinator.client,
                 self._entry.data.get(CONF_ACTIVE_CHANNELS, []),
+                stored_names,
             )
         except Exception:
             _LOGGER.warning("Could not read live thermostat data for options flow zones step.")
@@ -360,22 +373,39 @@ class WavinOptionsFlow(config_entries.OptionsFlow):
     async def async_step_temp_ranges(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Comfort / eco temperature limits — reads from device, writes on submit."""
+        """Comfort / eco temperature limits — one row per thermostat, not per channel.
+
+        Reads live values from the primary channel of each thermostat group.
+        On save, the same values are written to every channel in the group
+        and stored in options keyed by primary channel.
+        """
+        raw_groups = self._entry.data.get(CONF_THERMOSTAT_GROUPS, {})
+        thermostat_groups: dict[int, list[int]] = (
+            {int(k): v for k, v in raw_groups.items()}
+            if raw_groups
+            else {ch: [ch] for ch in self._entry.data.get(CONF_ACTIVE_CHANNELS, [])}
+        )
+        primary_channels: list[int] = sorted(thermostat_groups.keys())
         active_channels: list[int] = self._entry.data.get(CONF_ACTIVE_CHANNELS, [])
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            # Validate eco < comfort for every zone
             valid = True
-            for ch in active_channels:
-                comfort = user_input.get(f"zone_{ch + 1}_comfort", DEFAULT_COMFORT_TEMP)
-                eco     = user_input.get(f"zone_{ch + 1}_eco",     DEFAULT_ECO_TEMP)
+            for p in primary_channels:
+                comfort = user_input.get(f"zone_{p + 1}_comfort", DEFAULT_COMFORT_TEMP)
+                eco     = user_input.get(f"zone_{p + 1}_eco",     DEFAULT_ECO_TEMP)
                 if eco >= comfort:
-                    errors[f"zone_{ch + 1}_eco"] = "eco_above_comfort"
+                    errors[f"zone_{p + 1}_eco"] = "eco_above_comfort"
                     valid = False
 
             if valid:
-                # Write to device (best-effort; save regardless)
+                # Expand primary values to every channel in each group for device write.
+                expanded: dict[str, Any] = {}
+                for p in primary_channels:
+                    for ch in thermostat_groups.get(p, [p]):
+                        expanded[f"zone_{ch + 1}_comfort"] = user_input.get(f"zone_{p + 1}_comfort", DEFAULT_COMFORT_TEMP)
+                        expanded[f"zone_{ch + 1}_eco"]     = user_input.get(f"zone_{p + 1}_eco",     DEFAULT_ECO_TEMP)
+
                 try:
                     from .coordinator import WavinCoordinator
                     coordinator: WavinCoordinator = self.hass.data[DOMAIN][self._entry.entry_id]
@@ -383,37 +413,35 @@ class WavinOptionsFlow(config_entries.OptionsFlow):
                         _write_device_ranges,
                         coordinator.client,
                         active_channels,
-                        user_input,
+                        expanded,
                     )
                 except Exception:
                     _LOGGER.warning(
                         "Could not write temp ranges to device; values saved to options only."
                     )
 
-                comfort_map = {
-                    str(ch): user_input.get(f"zone_{ch + 1}_comfort", DEFAULT_COMFORT_TEMP)
-                    for ch in active_channels
-                }
-                eco_map = {
-                    str(ch): user_input.get(f"zone_{ch + 1}_eco", DEFAULT_ECO_TEMP)
-                    for ch in active_channels
-                }
                 return self.async_create_entry(
                     title="",
                     data={
                         **self._pending,
-                        CONF_CHANNEL_COMFORT_TEMPS: comfort_map,
-                        CONF_CHANNEL_ECO_TEMPS:     eco_map,
+                        CONF_CHANNEL_COMFORT_TEMPS: {
+                            str(p): user_input.get(f"zone_{p + 1}_comfort", DEFAULT_COMFORT_TEMP)
+                            for p in primary_channels
+                        },
+                        CONF_CHANNEL_ECO_TEMPS: {
+                            str(p): user_input.get(f"zone_{p + 1}_eco", DEFAULT_ECO_TEMP)
+                            for p in primary_channels
+                        },
                     },
                 )
 
-        # Read current values from device to pre-fill the form
+        # Read current values from device (primary channel per group is sufficient).
         live: dict[str, float] = {}
         try:
             from .coordinator import WavinCoordinator
             coordinator: WavinCoordinator = self.hass.data[DOMAIN][self._entry.entry_id]
             live = await self.hass.async_add_executor_job(
-                _read_device_ranges, coordinator.client, active_channels
+                _read_device_ranges, coordinator.client, primary_channels
             )
         except Exception:
             _LOGGER.warning("Could not read temp ranges from device; using stored values.")
@@ -422,24 +450,24 @@ class WavinOptionsFlow(config_entries.OptionsFlow):
         stored_eco     = self._entry.options.get(CONF_CHANNEL_ECO_TEMPS, {})
 
         schema_fields: dict = {}
-        for ch in active_channels:
-            name    = channel_display_name(self._entry.options, ch, self._entry.data)
-            comfort = live.get(f"{ch}_comfort") or stored_comfort.get(str(ch), DEFAULT_COMFORT_TEMP)
-            eco     = live.get(f"{ch}_eco")     or stored_eco.get(str(ch),     DEFAULT_ECO_TEMP)
+        for p in primary_channels:
+            name    = channel_display_name(self._entry.options, p, self._entry.data)
+            comfort = live.get(f"{p}_comfort") or stored_comfort.get(str(p), DEFAULT_COMFORT_TEMP)
+            eco     = live.get(f"{p}_eco")     or stored_eco.get(str(p),     DEFAULT_ECO_TEMP)
 
             schema_fields[
-                vol.Optional(f"zone_{ch + 1}_comfort", default=float(comfort))
+                vol.Optional(f"zone_{p + 1}_comfort", default=float(comfort))
             ] = selector.NumberSelector(
                 selector.NumberSelectorConfig(
-                    min=5, max=35, step=0.5, mode=selector.NumberSelectorMode.BOX,
+                    min=10, max=60, step=0.5, mode=selector.NumberSelectorMode.BOX,
                     unit_of_measurement="°C",
                 )
             )
             schema_fields[
-                vol.Optional(f"zone_{ch + 1}_eco", default=float(eco))
+                vol.Optional(f"zone_{p + 1}_eco", default=float(eco))
             ] = selector.NumberSelector(
                 selector.NumberSelectorConfig(
-                    min=5, max=35, step=0.5, mode=selector.NumberSelectorMode.BOX,
+                    min=10, max=60, step=0.5, mode=selector.NumberSelectorMode.BOX,
                     unit_of_measurement="°C",
                 )
             )
@@ -448,5 +476,5 @@ class WavinOptionsFlow(config_entries.OptionsFlow):
             step_id="temp_ranges",
             data_schema=vol.Schema(schema_fields),
             errors=errors,
-            description_placeholders={"zone_count": str(len(active_channels))},
+            description_placeholders={"zone_count": str(len(primary_channels))},
         )
