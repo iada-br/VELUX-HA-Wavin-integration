@@ -21,6 +21,7 @@ from .const import (
     CONF_CHANNEL_ECO_TEMPS,
     CONF_CHANNEL_NAMES,
     CONF_CHANNEL_THERMOSTAT_TYPES,
+    CONF_ELEMENT_MAP,
     CONF_SCAN_INTERVAL,
     CONF_SLAVE_ID,
     DEFAULT_COMFORT_TEMP,
@@ -70,19 +71,28 @@ _THERMOSTAT_TYPE_SELECTOR = selector.SelectSelector(
 
 
 def _scan_device(host: str, port: int, slave_id: int) -> dict:
-    """Blocking: connect, read device info, scan channels for wired thermostats."""
+    """Blocking: connect, read device info, scan channels for wired thermostats.
+
+    Returns the active channel list and an element_map that groups channels by
+    their shared physical thermostat (element_idx).  Two channels with the same
+    element_idx share a single thermostat wired to multiple zones.
+    """
     client = WavinClient(host, port, slave_id)
     try:
         client.connect()
         device_info = client.read_device_info()
         active: list[int] = []
+        element_map: dict[int, list[int]] = {}
         for ch in range(MAX_CHANNELS):
             prim = client.read_registers(
                 CAT_CHANNELS, IDX_CH_PRIMARY_ELEMENT, page=ch, qty=1
             )
-            if prim is not None and (prim[0] & PRIMARY_ELEMENT_IDX_MASK) > 0:
-                active.append(ch)
-        return {"device_info": device_info, "active_channels": active}
+            if prim is not None:
+                element_idx = prim[0] & PRIMARY_ELEMENT_IDX_MASK
+                if element_idx > 0:
+                    active.append(ch)
+                    element_map.setdefault(element_idx, []).append(ch)
+        return {"device_info": device_info, "active_channels": active, "element_map": element_map}
     finally:
         client.disconnect()
 
@@ -129,6 +139,7 @@ class WavinConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def __init__(self) -> None:
         self._connection_data: dict[str, Any] = {}
         self._active_channels: list[int] = []
+        self._element_map: dict[int, list[int]] = {}
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -155,6 +166,7 @@ class WavinConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._abort_if_unique_id_configured()
                 self._connection_data = user_input
                 self._active_channels = result["active_channels"]
+                self._element_map = result["element_map"]
                 return await self.async_step_confirm()
 
         return self.async_show_form(
@@ -170,8 +182,16 @@ class WavinConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return await self.async_step_zones()
 
         if self._active_channels:
-            zone_list = ", ".join(f"Zone {ch + 1}" for ch in self._active_channels)
-            summary = f"{len(self._active_channels)} zone(s) found: {zone_list}"
+            lines = []
+            for elem_idx, channels in sorted(self._element_map.items()):
+                zone_names = ", ".join(f"Zone {ch + 1}" for ch in channels)
+                shared = " ★ shared thermostat" if len(channels) > 1 else ""
+                lines.append(f"Thermostat #{elem_idx}: {zone_names}{shared}")
+            summary = (
+                f"{len(self._active_channels)} zone(s) detected across"
+                f" {len(self._element_map)} thermostat(s):\n"
+                + "\n".join(f"- {line}" for line in lines)
+            )
         else:
             summary = "No active zones detected. Check wiring and try again."
 
@@ -199,6 +219,7 @@ class WavinConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 data={
                     **self._connection_data,
                     CONF_ACTIVE_CHANNELS: self._active_channels,
+                    CONF_ELEMENT_MAP: {str(k): v for k, v in self._element_map.items()},
                     CONF_CHANNEL_NAMES: names,
                     CONF_CHANNEL_THERMOSTAT_TYPES: types,
                 },

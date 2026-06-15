@@ -19,6 +19,7 @@ from .const import (
     CAT_PACKED,
     CAT_CHANNELS,
     CONF_ACTIVE_CHANNELS,
+    CONF_ELEMENT_MAP,
     CONF_SCAN_INTERVAL,
     CONF_SLAVE_ID,
     DEFAULT_SCAN_INTERVAL,
@@ -74,6 +75,10 @@ class WavinCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self._entry = entry
         self.active_channels: list[int] = entry.data[CONF_ACTIVE_CHANNELS]
+        # element_map: element_idx (1-based) → list of channel indices sharing that thermostat.
+        # JSON round-trips dict keys as strings, so we restore them to int here.
+        raw_map = entry.data.get(CONF_ELEMENT_MAP, {})
+        self.element_map: dict[int, list[int]] = {int(k): v for k, v in raw_map.items()}
         self.client = WavinClient(
             host=entry.data[CONF_HOST],
             port=entry.data[CONF_PORT],
@@ -126,6 +131,22 @@ class WavinCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.client.ensure_connected()
         data: dict[str, Any] = {}
 
+        # Pre-compute read qty per element: 2 registers if any channel on that
+        # element has a floor sensor, so a shared read covers both channels.
+        element_qty: dict[int, int] = {
+            elem_idx: (
+                2 if any(
+                    channel_thermostat_type(self._entry.options, ch, self._entry.data)
+                    == THERMOSTAT_AIR_FLOOR
+                    for ch in channels
+                ) else 1
+            )
+            for elem_idx, channels in self.element_map.items()
+        }
+        # Cache raw temp reads by element_idx so shared thermostats are only
+        # queried once per poll cycle, not once per zone.
+        temps_cache: dict[int, list | None] = {}
+
         for ch in self.active_channels:
             # ── Thermostat-lost flag + element index ───────────────────────
             prim = self.client.read_registers(
@@ -162,16 +183,20 @@ class WavinCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # ── Air (+ floor) temperature ──────────────────────────────────
             # element_idx is 1-based; register pages for CAT_ELEMENTS are
             # 0-based, so page = element_idx - 1.
+            # temps_cache avoids re-reading the same physical thermostat when
+            # it is wired to multiple zones (same element_idx).
             has_floor = (
                 channel_thermostat_type(self._entry.options, ch, self._entry.data)
                 == THERMOSTAT_AIR_FLOOR
             )
             if element_idx > 0:
-                qty = 2 if has_floor else 1
-                temps = self.client.read_registers(
-                    CAT_ELEMENTS, IDX_ELEM_AIR_TEMP,
-                    page=element_idx - 1, qty=qty,
-                )
+                if element_idx not in temps_cache:
+                    qty = element_qty.get(element_idx, 2 if has_floor else 1)
+                    temps_cache[element_idx] = self.client.read_registers(
+                        CAT_ELEMENTS, IDX_ELEM_AIR_TEMP,
+                        page=element_idx - 1, qty=qty,
+                    )
+                temps = temps_cache[element_idx]
                 data[ch_key(ch, KEY_AIR_TEMP)] = (
                     raw_to_temp(temps[0]) if temps else None
                 )

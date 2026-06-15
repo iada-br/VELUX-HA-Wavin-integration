@@ -73,6 +73,7 @@ KEY_ECO_TEMP     = "eco_temp"
 KEY_VALVE_OPEN   = "valve_open"
 KEY_TP_LOST      = "tp_lost"
 KEY_CONFIGURED   = "configured"  # True when a thermostat is physically wired (element_idx > 0)
+CONF_ELEMENT_MAP = "element_map"  # dict str(element_idx) → list[int] of channel indices sharing that thermostat
 
 
 # ── Channel naming ────────────────────────────────────────────────────────────
