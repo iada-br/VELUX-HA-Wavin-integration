@@ -29,4 +29,8 @@ echo "Syncing integration files to HA via Samba..."
 powershell.exe -ExecutionPolicy Bypass -Command "$PS_SCRIPT"
 
 echo ""
+echo "Regenerating dashboard..."
+python3 "$(dirname "$0")/tools/generate_dashboard.py"
+
+echo ""
 echo "Restart Home Assistant to apply: http://$HA_HOST:8123/config/logs"
