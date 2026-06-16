@@ -19,30 +19,30 @@ from .const import (
     CAT_PACKED,
     CAT_CHANNELS,
     CONF_ACTIVE_CHANNELS,
+    CONF_CHANNEL_NAMES,
+    CONF_CHANNEL_THERMOSTAT_TYPES,
     CONF_ELEMENT_MAP,
     CONF_THERMOSTAT_GROUPS,
     CONF_SCAN_INTERVAL,
     CONF_SLAVE_ID,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
-    IDX_CH_COMFORT_TEMP,
-    IDX_CH_ECO_TEMP,
     IDX_CH_MANUAL_TEMP,
     IDX_CH_PRIMARY_ELEMENT,
     IDX_CH_TIMER_EVENT,
     IDX_ELEM_AIR_TEMP,
     KEY_AIR_TEMP,
-    KEY_COMFORT_TEMP,
     KEY_DESIRED_TEMP,
-    KEY_ECO_TEMP,
     KEY_FLOOR_TEMP,
     KEY_TP_LOST,
     KEY_VALVE_OPEN,
+    MAX_CHANNELS,
     MAX_TEMP,
     MIN_TEMP,
     PRIMARY_ELEMENT_IDX_MASK,
     PRIMARY_ELEMENT_TP_LOST_MASK,
     THERMOSTAT_AIR_FLOOR,
+    THERMOSTAT_AIR_ONLY,
     TIMER_EVENT_OUTP_ON_MASK,
     ch_key,
     channel_thermostat_type,
@@ -95,6 +95,8 @@ class WavinCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.thermostat_channels: list[int] = sorted(self.thermostat_groups.keys())
         # Flag: need a live scan to populate missing thermostat_groups (old config entry).
         self._group_scan_pending: bool = not bool(raw_groups)
+        # Flag: scan all MAX_CHANNELS on first poll to catch channels missed during initial setup.
+        self._full_scan_pending: bool = True
         self.client = WavinClient(
             host=entry.data[CONF_HOST],
             port=entry.data[CONF_PORT],
@@ -128,6 +130,7 @@ class WavinCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ) from exc
 
         live_groups: dict[int, list[int]] = result.pop("__live_groups__", {})
+        full_live_groups: dict[int, list[int]] | None = result.pop("__full_live_groups__", None)
 
         # Auto-discover thermostat groups when config entry pre-dates this feature.
         # On first successful poll we have live element_idx data; use it to build
@@ -152,6 +155,39 @@ class WavinCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.hass.config_entries.async_reload(self._entry.entry_id)
             )
 
+        # On the first poll, compare the full 16-channel scan against stored groups.
+        # If new channels are found (missed during initial setup), update the config
+        # entry and reload so all zones are correctly mapped.
+        elif full_live_groups is not None:
+            stored_set = frozenset(ch for chs in self.thermostat_groups.values() for ch in chs)
+            live_set = frozenset(ch for chs in full_live_groups.values() for ch in chs)
+            new_channels = live_set - stored_set
+            if new_channels:
+                new_active = sorted(live_set)
+                new_primaries = sorted(full_live_groups.keys())
+                self.active_channels = new_active
+                self.thermostat_groups = full_live_groups
+                self.thermostat_channels = new_primaries
+                self.hass.config_entries.async_update_entry(
+                    self._entry,
+                    data={
+                        **self._entry.data,
+                        CONF_ACTIVE_CHANNELS: new_active,
+                        CONF_THERMOSTAT_GROUPS: {str(k): v for k, v in full_live_groups.items()},
+                        CONF_CHANNEL_NAMES: {str(p): f"Zone {p + 1}" for p in new_primaries},
+                        CONF_CHANNEL_THERMOSTAT_TYPES: {
+                            str(p): THERMOSTAT_AIR_ONLY for p in new_primaries
+                        },
+                    },
+                )
+                _LOGGER.info(
+                    "Wavin AHC 9000: discovered new channel(s) %s — updating zone mapping and reloading.",
+                    sorted(new_channels),
+                )
+                self.hass.async_create_task(
+                    self.hass.config_entries.async_reload(self._entry.entry_id)
+                )
+
         return result
 
     # ── Blocking fetch (runs in executor thread) ──────────────────────────────
@@ -173,6 +209,22 @@ class WavinCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """
         self.client.ensure_connected()
         data: dict[str, Any] = {}
+
+        # One-time startup scan: read IDX_CH_PRIMARY_ELEMENT for all MAX_CHANNELS
+        # to detect channels that were inactive (element_idx=0) during initial setup.
+        if self._full_scan_pending:
+            self._full_scan_pending = False
+            full_elem_ch: dict[int, list[int]] = {}
+            for ch in range(MAX_CHANNELS):
+                prim = self.client.read_registers(
+                    CAT_CHANNELS, IDX_CH_PRIMARY_ELEMENT, page=ch, qty=1
+                )
+                element_idx = (prim[0] & PRIMARY_ELEMENT_IDX_MASK) if prim else 0
+                if element_idx > 0:
+                    full_elem_ch.setdefault(element_idx, []).append(ch)
+            data["__full_live_groups__"] = {
+                min(chs): sorted(chs) for chs in full_elem_ch.values()
+            }
 
         # Always read qty=2 (air + floor) on first encounter of an element_idx.
         # Element indices are reassigned each TCP session so the stored element_map
@@ -210,13 +262,6 @@ class WavinCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             data[ch_key(ch, KEY_DESIRED_TEMP)] = (
                 raw_to_temp(setp[0]) if setp else None
             )
-
-            # ── Comfort / eco limits ──────────────────────────────────────
-            comfort = self.client.read_registers(CAT_PACKED, IDX_CH_COMFORT_TEMP, page=ch, qty=1)
-            data[ch_key(ch, KEY_COMFORT_TEMP)] = raw_to_temp(comfort[0]) if comfort else None
-
-            eco = self.client.read_registers(CAT_PACKED, IDX_CH_ECO_TEMP, page=ch, qty=1)
-            data[ch_key(ch, KEY_ECO_TEMP)] = raw_to_temp(eco[0]) if eco else None
 
             # ── Air (+ floor) temperature ──────────────────────────────────
             # element_idx is 1-based; register pages for CAT_ELEMENTS are
@@ -286,30 +331,3 @@ class WavinCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self.hass.async_add_executor_job(_write)
         await self.async_request_refresh()
 
-    async def async_set_comfort_temp(self, channel: int, temp_celsius: float) -> None:
-        """Write the comfort (upper) limit to all channels in the thermostat group."""
-        temp_celsius = max(MIN_TEMP, min(MAX_TEMP, temp_celsius))
-        raw_val = int(round(temp_celsius * 10))
-        group = self.thermostat_groups.get(channel, [channel])
-
-        def _write() -> None:
-            self.client.ensure_connected()
-            for ch in group:
-                self.client.write_register(CAT_PACKED, IDX_CH_COMFORT_TEMP, page=ch, val=raw_val)
-
-        await self.hass.async_add_executor_job(_write)
-        await self.async_request_refresh()
-
-    async def async_set_eco_temp(self, channel: int, temp_celsius: float) -> None:
-        """Write the eco (lower) limit to all channels in the thermostat group."""
-        temp_celsius = max(MIN_TEMP, min(MAX_TEMP, temp_celsius))
-        raw_val = int(round(temp_celsius * 10))
-        group = self.thermostat_groups.get(channel, [channel])
-
-        def _write() -> None:
-            self.client.ensure_connected()
-            for ch in group:
-                self.client.write_register(CAT_PACKED, IDX_CH_ECO_TEMP, page=ch, val=raw_val)
-
-        await self.hass.async_add_executor_job(_write)
-        await self.async_request_refresh()

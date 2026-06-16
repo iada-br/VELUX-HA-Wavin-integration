@@ -75,52 +75,8 @@
           "zone_16_name": "Zone 16 — Room name",
           "zone_16_type": "Zone 16 — Thermostat type"
         }
-      },
-      "temp_ranges": {
-        "title": "Temperature Limits",
-        "description": "Set the comfort (upper) and eco (lower) temperature limits for each thermostat ({zone_count} detected). These limits apply to all loops sharing that thermostat. Values are read live from the device and written back on save.",
-        "data": {
-          "zone_1_comfort": "Zone 1 — Comfort temperature (°C)",
-          "zone_1_eco": "Zone 1 — Eco temperature (°C)",
-          "zone_2_comfort": "Zone 2 — Comfort temperature (°C)",
-          "zone_2_eco": "Zone 2 — Eco temperature (°C)",
-          "zone_3_comfort": "Zone 3 — Comfort temperature (°C)",
-          "zone_3_eco": "Zone 3 — Eco temperature (°C)",
-          "zone_4_comfort": "Zone 4 — Comfort temperature (°C)",
-          "zone_4_eco": "Zone 4 — Eco temperature (°C)",
-          "zone_5_comfort": "Zone 5 — Comfort temperature (°C)",
-          "zone_5_eco": "Zone 5 — Eco temperature (°C)",
-          "zone_6_comfort": "Zone 6 — Comfort temperature (°C)",
-          "zone_6_eco": "Zone 6 — Eco temperature (°C)",
-          "zone_7_comfort": "Zone 7 — Comfort temperature (°C)",
-          "zone_7_eco": "Zone 7 — Eco temperature (°C)",
-          "zone_8_comfort": "Zone 8 — Comfort temperature (°C)",
-          "zone_8_eco": "Zone 8 — Eco temperature (°C)",
-          "zone_9_comfort": "Zone 9 — Comfort temperature (°C)",
-          "zone_9_eco": "Zone 9 — Eco temperature (°C)",
-          "zone_10_comfort": "Zone 10 — Comfort temperature (°C)",
-          "zone_10_eco": "Zone 10 — Eco temperature (°C)",
-          "zone_11_comfort": "Zone 11 — Comfort temperature (°C)",
-          "zone_11_eco": "Zone 11 — Eco temperature (°C)",
-          "zone_12_comfort": "Zone 12 — Comfort temperature (°C)",
-          "zone_12_eco": "Zone 12 — Eco temperature (°C)",
-          "zone_13_comfort": "Zone 13 — Comfort temperature (°C)",
-          "zone_13_eco": "Zone 13 — Eco temperature (°C)",
-          "zone_14_comfort": "Zone 14 — Comfort temperature (°C)",
-          "zone_14_eco": "Zone 14 — Eco temperature (°C)",
-          "zone_15_comfort": "Zone 15 — Comfort temperature (°C)",
-          "zone_15_eco": "Zone 15 — Eco temperature (°C)",
-          "zone_16_comfort": "Zone 16 — Comfort temperature (°C)",
-          "zone_16_eco": "Zone 16 — Eco temperature (°C)"
-        },
-        "data_description": {
-          "zone_1_comfort": "Upper setpoint limit — controller will not heat above this.",
-          "zone_1_eco": "Lower setpoint limit — eco / night mode temperature."
-        }
       }
     },
-    "error": {
-      "eco_above_comfort": "Eco temperature must be lower than the comfort temperature."
-    }
+    "error": {}
   }
 }

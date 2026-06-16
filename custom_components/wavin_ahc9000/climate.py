@@ -17,13 +17,9 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
-    CONF_CHANNEL_COMFORT_TEMPS,
-    CONF_CHANNEL_ECO_TEMPS,
     DOMAIN,
     KEY_AIR_TEMP,
-    KEY_COMFORT_TEMP,
     KEY_DESIRED_TEMP,
-    KEY_ECO_TEMP,
     KEY_TP_LOST,
     MAX_TEMP,
     MIN_TEMP,
@@ -88,17 +84,11 @@ class WavinClimate(CoordinatorEntity[WavinCoordinator], ClimateEntity):
 
     @property
     def max_temp(self) -> float:
-        """Upper bound — live comfort setpoint, falls back to global MAX_TEMP."""
-        val = self.coordinator.data.get(ch_key(self._channel, KEY_COMFORT_TEMP))
-        result = float(val) if val is not None else MAX_TEMP
-        # Guarantee max > min even if device registers have unexpected values
-        return max(result, self.min_temp + TEMP_STEP)
+        return MAX_TEMP
 
     @property
     def min_temp(self) -> float:
-        """Lower bound — live eco setpoint, falls back to global MIN_TEMP."""
-        val = self.coordinator.data.get(ch_key(self._channel, KEY_ECO_TEMP))
-        return float(val) if val is not None else MIN_TEMP
+        return MIN_TEMP
 
     @property
     def available(self) -> bool:
