@@ -112,7 +112,7 @@ def channel_display_name(options: dict, channel: int, data: dict | None = None) 
     Checks options first, then data (initial-setup values), then default.
     """
     names = options.get(CONF_CHANNEL_NAMES) or (data or {}).get(CONF_CHANNEL_NAMES, {})
-    return names.get(str(channel), f"Zone {channel + 1}")
+    return names.get(str(channel), f"Channel {channel + 1}")
 
 
 def channel_thermostat_type(options: dict, channel: int, data: dict | None = None) -> str:

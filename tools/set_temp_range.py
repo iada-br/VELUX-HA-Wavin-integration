@@ -1,12 +1,17 @@
 """
 Read or change the comfort (upper) and eco (lower) temperature limits on a
-Wavin AHC 9000 zone.
+Wavin AHC 9000 channel.
+
+NOTE: The HA integration no longer uses these device-level comfort/eco limits.
+Temperature control is handled exclusively through the thermostat setpoint
+(CAT=0x02 IDX=0x00). This script remains available for direct device
+inspection and low-level testing only.
 
 Usage:
-    python tools/set_temp_range.py --read              # show all zones
-    python tools/set_temp_range.py --comfort 24.0      # set comfort limit, zone 1
-    python tools/set_temp_range.py --eco 18.0          # set eco limit, zone 1
-    python tools/set_temp_range.py --comfort 24.0 --eco 18.0 --zone 2
+    python tools/set_temp_range.py --read                   # show all channels
+    python tools/set_temp_range.py --comfort 24.0           # set comfort limit, channel 1
+    python tools/set_temp_range.py --eco 18.0               # set eco limit, channel 1
+    python tools/set_temp_range.py --comfort 24.0 --eco 18.0 --channel 2
 """
 import argparse
 import socket
@@ -146,8 +151,8 @@ def main() -> None:
                         help=f"Comfort (upper) limit in °C ({ABS_MIN}–{ABS_MAX})")
     parser.add_argument("--eco", type=float, metavar="TEMP",
                         help=f"Eco (lower) limit in °C ({ABS_MIN}–{ABS_MAX})")
-    parser.add_argument("--zone", type=int, default=1,
-                        help="Zone number, 1-based (default: 1)")
+    parser.add_argument("--channel", type=int, default=1,
+                        help="Channel number, 1-based (default: 1)")
     parser.add_argument("--read", action="store_true",
                         help="Show current limits for all zones, no write")
     parser.add_argument("--host", default=HOST)
@@ -165,7 +170,7 @@ def main() -> None:
         if args.eco >= args.comfort:
             parser.error("--eco must be lower than --comfort")
 
-    channel = args.zone - 1
+    channel = args.channel - 1
 
     print(f"Connecting to {args.host}:{args.port} ...")
     try:
@@ -176,20 +181,20 @@ def main() -> None:
 
     # ── Read-only mode ────────────────────────────────────────────────────
     if args.read:
-        print(f"\n{'Zone':<6} {'Eco (low)':>12}  {'Comfort (high)':>14}")
-        print("-" * 36)
+        print(f"\n{'Channel':<10} {'Eco (low)':>12}  {'Comfort (high)':>14}")
+        print("-" * 40)
         for ch in range(MAX_CHANNELS):
             eco     = read_limit(sock, IDX_ECO_TEMP,     ch)
             comfort = read_limit(sock, IDX_COMFORT_TEMP, ch)
             if eco is not None or comfort is not None:
                 eco_s     = f"{eco:.1f} °C"     if eco     is not None else "N/A"
                 comfort_s = f"{comfort:.1f} °C" if comfort is not None else "N/A"
-                print(f"Zone {ch + 1:<2}  {eco_s:>12}  {comfort_s:>14}")
+                print(f"Channel {ch + 1:<3}  {eco_s:>12}  {comfort_s:>14}")
         sock.close()
         return
 
     # ── Write mode ────────────────────────────────────────────────────────
-    print(f"\nZone {args.zone} (channel {channel})")
+    print(f"\nChannel {args.channel} (0-based index {channel})")
 
     comfort_now = read_limit(sock, IDX_COMFORT_TEMP, channel)
     eco_now     = read_limit(sock, IDX_ECO_TEMP,     channel)

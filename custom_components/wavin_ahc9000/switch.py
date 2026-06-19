@@ -8,7 +8,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, KEY_VALVE_OPEN, MAX_TEMP, MIN_TEMP, ch_key
+from .const import DOMAIN, KEY_VALVE_OPEN, MAX_TEMP, MIN_TEMP, ch_key, channel_display_name
 from .coordinator import WavinCoordinator
 
 
@@ -46,7 +46,8 @@ class WavinValveSwitch(CoordinatorEntity[WavinCoordinator], SwitchEntity):
         super().__init__(coordinator)
         self._channel = channel
         self._attr_unique_id = f"{entry.entry_id}_valve_switch_ch{channel}"
-        self._attr_name = f"Zone {channel + 1} Valve"
+        room = channel_display_name(entry.options, channel, entry.data)
+        self._attr_name = f"{room} Valve"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
             name="Wavin AHC 9000",

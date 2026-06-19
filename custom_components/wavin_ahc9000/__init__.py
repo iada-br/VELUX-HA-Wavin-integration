@@ -104,11 +104,11 @@ def _register_services(hass: HomeAssistant) -> None:
                 continue
 
             if zone_name is not None:
-                for ch in coordinator.active_channels:
-                    if channel_display_name(entry.options, ch).lower() == zone_name.lower():
+                for ch in coordinator.thermostat_channels:
+                    if channel_display_name(entry.options, ch, entry.data).lower() == zone_name.lower():
                         await coordinator.async_set_temperature(ch, temp)
                         return
-            elif channel_idx is not None and channel_idx in coordinator.active_channels:
+            elif channel_idx is not None and channel_idx in coordinator.thermostat_channels:
                 await coordinator.async_set_temperature(channel_idx, temp)
                 return
 
@@ -145,11 +145,11 @@ def _register_services(hass: HomeAssistant) -> None:
             if entry is None:
                 continue
             data = coordinator.data or {}
-            for ch in coordinator.active_channels:
+            for ch in coordinator.thermostat_channels:
                 zones.append(
                     {
                         "channel": ch,
-                        "name": channel_display_name(entry.options, ch),
+                        "name": channel_display_name(entry.options, ch, entry.data),
                         "valve_open": data.get(ch_key(ch, KEY_VALVE_OPEN), False),
                         "setpoint": data.get(ch_key(ch, KEY_DESIRED_TEMP)),
                     }

@@ -298,9 +298,14 @@ def raw_to_temp(raw: int) -> Optional[float]:
     """Convert a raw register uint16 to °C.
 
     0x7FFF → None (sensor absent or not wired).
-    All other values are signed int16 in units of 0.1 °C.
+    Values outside −15..80 °C are discarded as None — they come from reading
+    element register pages that don't correspond to a real thermostat (element
+    indices are reassigned per TCP session; garbage pages return arbitrary data).
     """
     if raw == 0x7FFF:
         return None
     signed = raw if raw < 0x8000 else raw - 0x10000
-    return round(signed / 10.0, 1)
+    temp = round(signed / 10.0, 1)
+    if not (-15.0 <= temp <= 80.0):
+        return None
+    return temp

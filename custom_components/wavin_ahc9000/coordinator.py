@@ -36,7 +36,6 @@ from .const import (
     KEY_FLOOR_TEMP,
     KEY_TP_LOST,
     KEY_VALVE_OPEN,
-    MAX_CHANNELS,
     MAX_TEMP,
     MIN_TEMP,
     PRIMARY_ELEMENT_IDX_MASK,
@@ -95,8 +94,6 @@ class WavinCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.thermostat_channels: list[int] = sorted(self.thermostat_groups.keys())
         # Flag: need a live scan to populate missing thermostat_groups (old config entry).
         self._group_scan_pending: bool = not bool(raw_groups)
-        # Flag: scan all MAX_CHANNELS on first poll to catch channels missed during initial setup.
-        self._full_scan_pending: bool = True
         self.client = WavinClient(
             host=entry.data[CONF_HOST],
             port=entry.data[CONF_PORT],
@@ -130,7 +127,6 @@ class WavinCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ) from exc
 
         live_groups: dict[int, list[int]] = result.pop("__live_groups__", {})
-        full_live_groups: dict[int, list[int]] | None = result.pop("__full_live_groups__", None)
 
         # Auto-discover thermostat groups when config entry pre-dates this feature.
         # On first successful poll we have live element_idx data; use it to build
@@ -155,39 +151,6 @@ class WavinCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.hass.config_entries.async_reload(self._entry.entry_id)
             )
 
-        # On the first poll, compare the full 16-channel scan against stored groups.
-        # If new channels are found (missed during initial setup), update the config
-        # entry and reload so all zones are correctly mapped.
-        elif full_live_groups is not None:
-            stored_set = frozenset(ch for chs in self.thermostat_groups.values() for ch in chs)
-            live_set = frozenset(ch for chs in full_live_groups.values() for ch in chs)
-            new_channels = live_set - stored_set
-            if new_channels:
-                new_active = sorted(live_set)
-                new_primaries = sorted(full_live_groups.keys())
-                self.active_channels = new_active
-                self.thermostat_groups = full_live_groups
-                self.thermostat_channels = new_primaries
-                self.hass.config_entries.async_update_entry(
-                    self._entry,
-                    data={
-                        **self._entry.data,
-                        CONF_ACTIVE_CHANNELS: new_active,
-                        CONF_THERMOSTAT_GROUPS: {str(k): v for k, v in full_live_groups.items()},
-                        CONF_CHANNEL_NAMES: {str(p): f"Zone {p + 1}" for p in new_primaries},
-                        CONF_CHANNEL_THERMOSTAT_TYPES: {
-                            str(p): THERMOSTAT_AIR_ONLY for p in new_primaries
-                        },
-                    },
-                )
-                _LOGGER.info(
-                    "Wavin AHC 9000: discovered new channel(s) %s — updating zone mapping and reloading.",
-                    sorted(new_channels),
-                )
-                self.hass.async_create_task(
-                    self.hass.config_entries.async_reload(self._entry.entry_id)
-                )
-
         return result
 
     # ── Blocking fetch (runs in executor thread) ──────────────────────────────
@@ -209,22 +172,6 @@ class WavinCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """
         self.client.ensure_connected()
         data: dict[str, Any] = {}
-
-        # One-time startup scan: read IDX_CH_PRIMARY_ELEMENT for all MAX_CHANNELS
-        # to detect channels that were inactive (element_idx=0) during initial setup.
-        if self._full_scan_pending:
-            self._full_scan_pending = False
-            full_elem_ch: dict[int, list[int]] = {}
-            for ch in range(MAX_CHANNELS):
-                prim = self.client.read_registers(
-                    CAT_CHANNELS, IDX_CH_PRIMARY_ELEMENT, page=ch, qty=1
-                )
-                element_idx = (prim[0] & PRIMARY_ELEMENT_IDX_MASK) if prim else 0
-                if element_idx > 0:
-                    full_elem_ch.setdefault(element_idx, []).append(ch)
-            data["__full_live_groups__"] = {
-                min(chs): sorted(chs) for chs in full_elem_ch.values()
-            }
 
         # Always read qty=2 (air + floor) on first encounter of an element_idx.
         # Element indices are reassigned each TCP session so the stored element_map
@@ -289,9 +236,12 @@ class WavinCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 data[ch_key(ch, KEY_AIR_TEMP)] = None
                 data[ch_key(ch, KEY_FLOOR_TEMP)] = None
 
-        # Aggregate valve and tp_lost per thermostat group.
-        # For shared thermostats the entity should report "heating" if ANY of
-        # its zones has an open valve, and "lost" if ANY channel is lost.
+        # Aggregate per-group data.
+        # Valve: heating if ANY channel in the zone is open.
+        # TP lost: lost if ANY channel is lost.
+        # Desired temp: all channels in a zone share one setpoint — use the
+        # primary channel's value as the authoritative zone setpoint, so all
+        # channels reflect the same target temperature.
         for primary_ch, group_channels in self.thermostat_groups.items():
             if len(group_channels) > 1:
                 data[ch_key(primary_ch, KEY_VALVE_OPEN)] = any(
@@ -300,6 +250,10 @@ class WavinCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 data[ch_key(primary_ch, KEY_TP_LOST)] = any(
                     data.get(ch_key(ch, KEY_TP_LOST), False) for ch in group_channels
                 )
+                zone_setpoint = data.get(ch_key(primary_ch, KEY_DESIRED_TEMP))
+                if zone_setpoint is not None:
+                    for ch in group_channels:
+                        data[ch_key(ch, KEY_DESIRED_TEMP)] = zone_setpoint
 
         # Pass live grouping back for auto-discovery in _async_update_data.
         data["__live_groups__"] = {
@@ -313,9 +267,20 @@ class WavinCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_set_temperature(
         self, channel: int, temp_celsius: float
     ) -> None:
-        """Write a new setpoint to all channels in the thermostat group."""
+        """Write a new setpoint to all channels in the thermostat group.
+
+        Accepts either a primary channel (key in thermostat_groups) or any
+        member channel — both resolve to the full group so the setpoint is
+        always written uniformly across every circuit sharing that thermostat.
+        """
         temp_celsius = max(MIN_TEMP, min(MAX_TEMP, temp_celsius))
         raw_val = int(round(temp_celsius * 10))
+        # Resolve to the primary channel that owns this channel's group.
+        if channel not in self.thermostat_groups:
+            channel = next(
+                (p for p, chs in self.thermostat_groups.items() if channel in chs),
+                channel,
+            )
         group = self.thermostat_groups.get(channel, [channel])
 
         def _write() -> None:

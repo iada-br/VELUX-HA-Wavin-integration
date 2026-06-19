@@ -165,14 +165,12 @@ def build_dashboard(entry: dict, uid_map: dict[str, str]) -> dict:
     thermostat_cards = []
     for primary_ch_str in sorted(raw_groups, key=lambda k: int(k)):
         primary_ch = int(primary_ch_str)
-        zone_name = channel_names.get(primary_ch_str, f"Zone {primary_ch + 1}")
+        zone_name = channel_names.get(primary_ch_str, f"Channel {primary_ch + 1}")
 
         # Resolve actual entity IDs from the HA entity registry.
-        climate_id  = _entity(uid_map, entry_id, f"climate_ch{primary_ch}")
-        valve_id    = _entity(uid_map, entry_id, f"valve_switch_ch{primary_ch}")
-        air_id      = _entity(uid_map, entry_id, f"sensor_ch{primary_ch}_air_temp")
-        comfort_id  = _entity(uid_map, entry_id, f"number_ch{primary_ch}_comfort_temp")
-        eco_id      = _entity(uid_map, entry_id, f"number_ch{primary_ch}_eco_temp")
+        climate_id = _entity(uid_map, entry_id, f"climate_ch{primary_ch}")
+        valve_id   = _entity(uid_map, entry_id, f"valve_switch_ch{primary_ch}")
+        air_id     = _entity(uid_map, entry_id, f"sensor_ch{primary_ch}_air_temp")
 
         if not climate_id:
             print(f"  ⚠  No climate entity found for channel {primary_ch} — skipping.")
@@ -183,15 +181,11 @@ def build_dashboard(entry: dict, uid_map: dict[str, str]) -> dict:
             entity_rows.append({"entity": valve_id, "name": "Heating active", "icon": "mdi:radiator"})
         if air_id:
             entity_rows.append({"entity": air_id, "name": "Air temperature"})
-        if comfort_id:
-            entity_rows.append({"entity": comfort_id, "name": "Comfort limit"})
-        if eco_id:
-            entity_rows.append({"entity": eco_id, "name": "Eco limit"})
 
         card: dict = {
             "type": "vertical-stack",
             "cards": [
-                {"type": "thermostat", "entity": climate_id, "min_temp": 0, "max_temp": 100},
+                {"type": "thermostat", "entity": climate_id, "min_temp": 10, "max_temp": 40},
             ],
         }
         if entity_rows:

@@ -2,54 +2,42 @@ title: Underfloor Heating
 views:
 - cards:
   - cards:
-    - entity: climate.wavin_ahc_9000_zone_3
-      max_temp: 100
-      min_temp: 0
+    - entity: climate.wavin_ahc_9000_channel_1
+      max_temp: 40
+      min_temp: 10
       type: thermostat
     - entities:
-      - entity: switch.wavin_ahc_9000_zone_3_valve
+      - entity: switch.wavin_ahc_9000_channel_1_valve
         icon: mdi:radiator
         name: Heating active
-      - entity: sensor.wavin_ahc_9000_zone_3_air_temperature
+      - entity: sensor.wavin_ahc_9000_channel_1_air_temperature
         name: Air temperature
-      - entity: number.wavin_ahc_9000_zone_3_comfort_temperature
-        name: Comfort limit
-      - entity: number.wavin_ahc_9000_zone_3_eco_temperature
-        name: Eco limit
       type: entities
     type: vertical-stack
   - cards:
-    - entity: climate.wavin_ahc_9000_zone_7
-      max_temp: 100
-      min_temp: 0
+    - entity: climate.wavin_ahc_9000_channel_7
+      max_temp: 40
+      min_temp: 10
       type: thermostat
     - entities:
-      - entity: switch.wavin_ahc_9000_zone_7_valve
+      - entity: switch.wavin_ahc_9000_channel_7_valve
         icon: mdi:radiator
         name: Heating active
-      - entity: sensor.wavin_ahc_9000_zone_7_air_temperature
+      - entity: sensor.wavin_ahc_9000_channel_7_air_temperature
         name: Air temperature
-      - entity: number.wavin_ahc_9000_zone_7_comfort_temperature
-        name: Comfort limit
-      - entity: number.wavin_ahc_9000_zone_7_eco_temperature
-        name: Eco limit
       type: entities
     type: vertical-stack
   - cards:
-    - entity: climate.wavin_ahc_9000_zone_14
-      max_temp: 100
-      min_temp: 0
+    - entity: climate.wavin_ahc_9000_channel_13
+      max_temp: 40
+      min_temp: 10
       type: thermostat
     - entities:
-      - entity: switch.wavin_ahc_9000_zone_14_valve
+      - entity: switch.wavin_ahc_9000_channel_13_valve
         icon: mdi:radiator
         name: Heating active
-      - entity: sensor.wavin_ahc_9000_zone_14_air_temperature
+      - entity: sensor.wavin_ahc_9000_channel_13_air_temperature
         name: Air temperature
-      - entity: number.wavin_ahc_9000_zone_14_comfort_temperature
-        name: Comfort limit
-      - entity: number.wavin_ahc_9000_zone_14_eco_temperature
-        name: Eco limit
       type: entities
     type: vertical-stack
   icon: mdi:radiator

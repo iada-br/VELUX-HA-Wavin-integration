@@ -126,7 +126,13 @@ def raw_to_temp(raw: int) -> Optional[float]:
     if raw == SENSOR_NA:
         return None
     signed = raw if raw < 0x8000 else raw - 0x10000
-    return round(signed / 10.0, 1)
+    temp = round(signed / 10.0, 1)
+    # Discard physically implausible values — these come from reading element
+    # registers on pages that don't correspond to a real thermostat (element
+    # indices are reassigned per TCP session and some channels return garbage).
+    if not (-15.0 <= temp <= 80.0):
+        return None
+    return temp
 
 
 def temp_str(val: Optional[float]) -> str:
@@ -247,36 +253,47 @@ def read_averaged(c: Client, samples: int = 4, debug: bool = False) -> dict:
 
     last_snap = all_data[-1]
     return {
-        "hw_ver":   last_snap.get("hw_ver"),
-        "sw_ver":   last_snap.get("sw_ver"),
-        "dev_name": last_snap.get("dev_name"),
-        "channels": merged_channels,
-        "samples":  samples,
+        "hw_ver":      last_snap.get("hw_ver"),
+        "sw_ver":      last_snap.get("sw_ver"),
+        "dev_name":    last_snap.get("dev_name"),
+        "channels":    merged_channels,
+        "thermostats": _group_by_thermostat(merged_channels),
+        "samples":     samples,
     }
 
 
-def print_thermostats(channels: list) -> None:
-    """Print a thermostat-centric view: one row per unique physical thermostat."""
-    # Group zones by element_idx
+def _format_circuits(chs: list) -> str:
+    """Return a compact 1-indexed circuit list: consecutive runs as 'a-b'."""
+    ns = sorted(c + 1 for c in chs)
+    if len(ns) == 1:
+        return str(ns[0])
+    # Check if all numbers form a single consecutive range.
+    if ns == list(range(ns[0], ns[-1] + 1)):
+        return f"{ns[0]}-{ns[-1]}"
+    return ", ".join(str(n) for n in ns)
+
+
+def _group_by_thermostat(channels: list) -> list:
+    """Aggregate per-circuit data into one entry per physical thermostat group."""
     by_elem: dict[int, list] = {}
     for z in channels:
         by_elem.setdefault(z["element"], []).append(z)
 
-    print()
-    print("  THERMOSTATS (physical sensors)")
-    print("  " + "-" * 74)
-    print(f"  {'Therm':<7} {'Zones controlled':<28} {'Air':>8}  {'Floor':>8}  {'Status'}")
-    print("  " + "-" * 74)
-    for elem_idx, zones in sorted(by_elem.items()):
-        zone_names = ", ".join(f"Zone {z['ch'] + 1}" for z in zones)
-        air   = zones[0]["air"]
-        floor = zones[0]["floor"]
-        tp_lost = any(z["tp_lost"] for z in zones)
-        status = "TP LOST" if tp_lost else ("shared ×%d" % len(zones) if len(zones) > 1 else "")
-        print(
-            f"  #{elem_idx:<6} {zone_names:<28}  {temp_str(air)}  {temp_str(floor)}  {status}"
-        )
-    print("  " + "-" * 74)
+    result = []
+    for elem_idx, chs in sorted(by_elem.items()):
+        primary = min(z["ch"] for z in chs)
+        primary_data = next(z for z in chs if z["ch"] == primary)
+        result.append({
+            "element":    elem_idx,
+            "primary_ch": primary,
+            "channels":   sorted(z["ch"] for z in chs),
+            "air":        primary_data["air"],
+            "floor":      primary_data["floor"],
+            "desired":    primary_data["desired"],
+            "valve":      any(z["valve"]   for z in chs),
+            "tp_lost":    any(z["tp_lost"] for z in chs),
+        })
+    return result
 
 
 def print_table(data: dict, host: str, port: int) -> None:
@@ -287,37 +304,38 @@ def print_table(data: dict, host: str, port: int) -> None:
     dev = data.get("dev_name")
     print(f"Wavin AHC 9000  [{host}:{port}]"
           f"  device={dev}  hw={hw}  sw={sw}")
-    print("-" * 78)
-    print(f"  {'Zone':<8} {'Therm':>5}  {'Air':>8}  {'Floor':>8}  {'Setpoint':>9}  {'Valve':>6}  {'TP'}  {'Note'}")
-    print("-" * 78)
 
-    channels = data.get("channels", [])
-    if not channels:
-        print("  No active zones detected.")
+    SEP = "-" * 83
+    print(SEP)
+    print(f"  {'Channel':<13} {'Circuits':<12}  {'Air':>8}  {'Floor':>8}  {'Setpoint':>9}  {'Valve':>6}  {'TP'}")
+    print(SEP)
+
+    thermostats = data.get("thermostats") or _group_by_thermostat(data.get("channels", []))
+    total_circuits = sum(len(t["channels"]) for t in thermostats)
+
+    if not thermostats:
+        print("  No active thermostats detected.")
     else:
-        for z in channels:
-            valve_icon = "OPEN  " if z["valve"]   else "closed"
-            tp_icon    = "LOST" if z["tp_lost"] else "OK  "
-            shared_note = "shared thermostat" if z.get("shared") else ""
+        for t in thermostats:
+            label      = f"Channel {t['primary_ch'] + 1}"
+            circuits   = _format_circuits(t["channels"])
+            valve_icon = "OPEN  " if t["valve"]   else "closed"
+            tp_icon    = "LOST" if t["tp_lost"] else "OK"
             print(
-                f"  Zone {z['ch'] + 1:<3}  "
-                f"  [#{z['element']:>2}]  "
-                f"  {temp_str(z['air'])}  "
-                f"  {temp_str(z['floor'])}  "
-                f"  {temp_str(z['desired'])}  "
-                f"  {valve_icon}  "
-                f"  {tp_icon}  "
-                f"  {shared_note}"
+                f"  {label:<13} {circuits:<12}  "
+                f"{temp_str(t['air'])}  "
+                f"{temp_str(t['floor'])}  "
+                f"{temp_str(t['desired'])}  "
+                f"{valve_icon}  "
+                f"{tp_icon}"
             )
 
     samples = data.get("samples", 1)
-    print("-" * 78)
+    print(SEP)
     print(f"  Last update: {time.strftime('%H:%M:%S')}   "
-          f"Active zones: {len(channels)}/{MAX_CHANNELS}   "
+          f"Thermostats: {len(thermostats)}   "
+          f"Total circuits: {total_circuits}/{MAX_CHANNELS}   "
           f"Averaged over: {samples} sample(s)")
-
-    if channels:
-        print_thermostats(channels)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -330,7 +348,7 @@ def main() -> None:
     parser.add_argument("--watch",    action="store_true",   help="Refresh every N s (Ctrl+C to stop)")
     parser.add_argument("--interval", default=5,             type=int, help="Watch interval in seconds")
     parser.add_argument("--debug",    action="store_true",   help="Print raw TX/RX bytes for every register read")
-    parser.add_argument("--samples",  default=4, type=int,  help="Number of readings to average (default: 4)")
+    parser.add_argument("--samples",  default=8, type=int,  help="Number of readings to average (default: 8)")
     args = parser.parse_args()
 
     while True:
