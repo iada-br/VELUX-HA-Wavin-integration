@@ -24,6 +24,7 @@ from .const import (
     ch_key,
 )
 from .coordinator import WavinCoordinator
+from .lovelace import async_remove_dashboard, async_setup_dashboard
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -52,6 +53,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
+    # Entity registry is populated now — safe to build the dashboard.
+    # Wrapped in try/except so a dashboard failure never prevents the integration
+    # from loading.
+    try:
+        await async_setup_dashboard(hass, entry)
+    except Exception:
+        _LOGGER.exception(
+            "Wavin AHC 9000: dashboard setup failed — integration still loaded."
+        )
+
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
     # Register services once for the whole domain (guard against multiple entries).
@@ -64,6 +75,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Reload the integration when options are changed."""
     await hass.config_entries.async_reload(entry.entry_id)
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Clean up dashboard storage when the integration is removed."""
+    await async_remove_dashboard(hass)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

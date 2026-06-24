@@ -108,7 +108,11 @@ class WavinClimate(CoordinatorEntity[WavinCoordinator], ClimateEntity):
     @property
     def extra_state_attributes(self) -> dict:
         tp_lost = self.coordinator.data.get(ch_key(self._channel, KEY_TP_LOST))
-        return {"thermostat_lost": tp_lost}
+        group = self.coordinator.thermostat_groups.get(self._channel, [self._channel])
+        return {
+            "thermostat_lost": tp_lost,
+            "linked_circuits": sorted(ch + 1 for ch in group),
+        }
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
         """Handle a temperature change requested from the HA UI or an automation."""

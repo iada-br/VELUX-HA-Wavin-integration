@@ -22,7 +22,7 @@ from pathlib import Path
 # ── HA connection ─────────────────────────────────────────────────────────────
 HA_HOST = "192.168.1.72"
 HA_USER = "homeassistant"
-HA_PASS = "1234"
+HA_PASS = "12345"
 DOMAIN  = "wavin_ahc9000"
 
 # ── Dashboard identity ────────────────────────────────────────────────────────
@@ -176,11 +176,19 @@ def build_dashboard(entry: dict, uid_map: dict[str, str]) -> dict:
             print(f"  ⚠  No climate entity found for channel {primary_ch} — skipping.")
             continue
 
+        linked_circuits = sorted(int(c) + 1 for c in raw_groups[primary_ch_str])
+
         entity_rows = []
         if valve_id:
             entity_rows.append({"entity": valve_id, "name": "Heating active", "icon": "mdi:radiator"})
         if air_id:
             entity_rows.append({"entity": air_id, "name": "Air temperature"})
+        entity_rows.append({
+            "entity": climate_id,
+            "attribute": "linked_circuits",
+            "name": "Linked circuits",
+            "icon": "mdi:pipe-disconnected",
+        })
 
         card: dict = {
             "type": "vertical-stack",

@@ -4,7 +4,7 @@ set -euo pipefail
 HA_HOST="192.168.1.72"
 HA_SHARE="config"
 HA_USER="homeassistant"
-HA_PASS="1234"
+HA_PASS="12345"
 SRC="$(cd "$(dirname "$0")"; pwd)/custom_components/wavin_ahc9000"
 DST_REL="custom_components\\wavin_ahc9000"
 
