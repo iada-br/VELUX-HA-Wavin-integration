@@ -11,8 +11,15 @@ import argparse
 import os
 import socket
 import struct
+import sys
 import time
+from pathlib import Path
 from typing import Optional
+
+
+# Allow importing sibling tool without installing a package.
+sys.path.insert(0, str(Path(__file__).parent))
+from discover_pusr import detect_subnet, scan_subnet, verify_modbus  # noqa: E402
 
 # ── Connection defaults (match integration defaults) ──────────────────────────
 DEFAULT_HOST  = "192.168.1.199"
@@ -39,6 +46,25 @@ PRIMARY_ELEMENT_IDX_MASK     = 0x003F
 PRIMARY_ELEMENT_TP_LOST_MASK = 0x0400
 TIMER_EVENT_OUTP_ON_MASK     = 0x0010
 SENSOR_NA = 0x7FFF
+
+
+# ── USR gateway discovery ─────────────────────────────────────────────────────
+
+def discover_usr(port: int = DEFAULT_PORT) -> Optional[str]:
+    """Scan the local subnet for a Wavin gateway on `port`.
+
+    Uses discover_pusr for WSL2-aware subnet detection and Modbus verification.
+    Returns the first confirmed gateway IP, or None.
+    """
+    try:
+        subnet = detect_subnet()
+    except RuntimeError:
+        return None
+    candidates = scan_subnet(subnet, port)
+    for ip in candidates:
+        if verify_modbus(ip, port):
+            return ip
+    return candidates[0] if candidates else None
 
 
 # ── Minimal Modbus RTU-over-TCP client ───────────────────────────────────────
@@ -351,14 +377,21 @@ def main() -> None:
     parser.add_argument("--samples",  default=8, type=int,  help="Number of readings to average (default: 8)")
     args = parser.parse_args()
 
+    host = args.host
     while True:
-        c = Client(args.host, args.port, args.slave)
+        c = Client(host, args.port, args.slave)
         try:
             c.connect()
             data = read_averaged(c, samples=args.samples, debug=args.debug)
-            print_table(data, args.host, args.port)
+            print_table(data, host, args.port)
         except (OSError, socket.timeout) as e:
-            print(f"Connection error: {e}")
+            print(f"Connection error ({host}:{args.port}): {e}")
+            found = discover_usr(port=args.port)
+            if found:
+                print(f"[✓] Gateway found: {found}")
+                host = found
+            else:
+                print("[!] No gateway found on local network.")
         finally:
             c.close()
 
