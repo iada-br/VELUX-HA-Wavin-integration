@@ -1,0 +1,57 @@
+title: Underfloor Heating
+views:
+- cards:
+  - cards:
+    - entity: climate.wavin_ahc_9000_channel_1
+      max_temp: 40
+      min_temp: 10
+      type: thermostat
+    - entities:
+      - entity: switch.wavin_ahc_9000_channel_1_valve
+        icon: mdi:radiator
+        name: Heating active
+      - entity: sensor.wavin_ahc_9000_channel_1_air_temperature
+        name: Air temperature
+      - attribute: linked_circuits
+        entity: climate.wavin_ahc_9000_channel_1
+        icon: mdi:pipe-disconnected
+        name: Linked circuits
+      type: entities
+    type: vertical-stack
+  - cards:
+    - entity: climate.wavin_ahc_9000_channel_7
+      max_temp: 40
+      min_temp: 10
+      type: thermostat
+    - entities:
+      - entity: switch.wavin_ahc_9000_channel_7_valve
+        icon: mdi:radiator
+        name: Heating active
+      - entity: sensor.wavin_ahc_9000_channel_7_air_temperature
+        name: Air temperature
+      - attribute: linked_circuits
+        entity: climate.wavin_ahc_9000_channel_7
+        icon: mdi:pipe-disconnected
+        name: Linked circuits
+      type: entities
+    type: vertical-stack
+  - cards:
+    - entity: climate.wavin_ahc_9000_channel_13
+      max_temp: 40
+      min_temp: 10
+      type: thermostat
+    - entities:
+      - entity: switch.wavin_ahc_9000_channel_13_valve
+        icon: mdi:radiator
+        name: Heating active
+      - entity: sensor.wavin_ahc_9000_channel_13_air_temperature
+        name: Air temperature
+      - attribute: linked_circuits
+        entity: climate.wavin_ahc_9000_channel_13
+        icon: mdi:pipe-disconnected
+        name: Linked circuits
+      type: entities
+    type: vertical-stack
+  icon: mdi:radiator
+  path: heating
+  title: Heating

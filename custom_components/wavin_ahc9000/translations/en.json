@@ -1,0 +1,137 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Wavin AHC 9000",
+        "description": "Enter the connection details for the AHC 9000 controller. The controller will be scanned automatically and all active channels will be set up with default names.\n\nTo rename channels or set thermostat types, open **Settings → Integrations → Wavin AHC 9000 → Configure** after setup.",
+        "data": {
+          "host": "Host / IP Address",
+          "port": "TCP Port",
+          "slave_id": "RS-485 Slave ID",
+          "scan_interval": "Poll Interval (seconds)",
+          "num_thermostats": "Number of thermostats"
+        },
+        "data_description": {
+          "host": "IP address or hostname of the RS-485 bridge (e.g. 10.10.100.254).",
+          "port": "TCP port on the USR-TCP232 gateway. Default is 8899.",
+          "slave_id": "Modbus slave address of the AHC 9000. Usually 1.",
+          "scan_interval": "How often to read register values from the controller (10–300 seconds).",
+          "num_thermostats": "How many physical thermostats are connected to the AHC 9000. The scan is validated against this count — retry if the number of thermostats found does not match."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to the device. Check the host, port, and that the bridge is reachable on the network.",
+      "unknown": "Unexpected error — check the Home Assistant logs for details.",
+      "thermostat_count_mismatch": "The scan found a different number of thermostats than expected. Wait a moment for all thermostats to communicate and try again."
+    },
+    "abort": {
+      "already_configured": "This device is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "General Settings",
+        "description": "Adjust how often the controller is polled. Enable re-scan to detect any changes in the thermostat channel mapping.",
+        "data": {
+          "scan_interval": "Poll Interval (seconds)",
+          "rescan_channels": "Re-scan device to update channel mapping",
+          "manual_groups": "Manually configure thermostat groups",
+          "num_thermostats": "Expected number of thermostats"
+        },
+        "data_description": {
+          "scan_interval": "How often to read register values from the controller (10–300 seconds).",
+          "rescan_channels": "Connect to the device and re-discover which channels belong to each thermostat. This overwrites the current mapping.",
+          "manual_groups": "Skip the automatic scan and manually assign circuits to each thermostat. Ignored when Re-scan is also enabled.",
+          "num_thermostats": "How many physical thermostats should the re-scan find. Also controls how many groups are shown in the manual configuration step."
+        }
+      },
+      "groups": {
+        "title": "Manual Thermostat Groups",
+        "description": "Enter the circuit numbers (1–16, comma-separated) that belong to each thermostat. Each circuit must appear in exactly one group.",
+        "data": {
+          "group_1_channels":  "Thermostat 1 — Circuits",
+          "group_2_channels":  "Thermostat 2 — Circuits",
+          "group_3_channels":  "Thermostat 3 — Circuits",
+          "group_4_channels":  "Thermostat 4 — Circuits",
+          "group_5_channels":  "Thermostat 5 — Circuits",
+          "group_6_channels":  "Thermostat 6 — Circuits",
+          "group_7_channels":  "Thermostat 7 — Circuits",
+          "group_8_channels":  "Thermostat 8 — Circuits",
+          "group_9_channels":  "Thermostat 9 — Circuits",
+          "group_10_channels": "Thermostat 10 — Circuits",
+          "group_11_channels": "Thermostat 11 — Circuits",
+          "group_12_channels": "Thermostat 12 — Circuits",
+          "group_13_channels": "Thermostat 13 — Circuits",
+          "group_14_channels": "Thermostat 14 — Circuits",
+          "group_15_channels": "Thermostat 15 — Circuits",
+          "group_16_channels": "Thermostat 16 — Circuits"
+        },
+        "data_description": {
+          "group_1_channels":  "Comma-separated circuit numbers that share this thermostat, e.g. 1, 2, 3, 4, 5, 6",
+          "group_2_channels":  "Comma-separated circuit numbers that share this thermostat, e.g. 7, 8, 9, 10, 11",
+          "group_3_channels":  "Comma-separated circuit numbers that share this thermostat, e.g. 13, 14, 15, 16",
+          "group_4_channels":  "Comma-separated circuit numbers that share this thermostat",
+          "group_5_channels":  "Comma-separated circuit numbers that share this thermostat",
+          "group_6_channels":  "Comma-separated circuit numbers that share this thermostat",
+          "group_7_channels":  "Comma-separated circuit numbers that share this thermostat",
+          "group_8_channels":  "Comma-separated circuit numbers that share this thermostat",
+          "group_9_channels":  "Comma-separated circuit numbers that share this thermostat",
+          "group_10_channels": "Comma-separated circuit numbers that share this thermostat",
+          "group_11_channels": "Comma-separated circuit numbers that share this thermostat",
+          "group_12_channels": "Comma-separated circuit numbers that share this thermostat",
+          "group_13_channels": "Comma-separated circuit numbers that share this thermostat",
+          "group_14_channels": "Comma-separated circuit numbers that share this thermostat",
+          "group_15_channels": "Comma-separated circuit numbers that share this thermostat",
+          "group_16_channels": "Comma-separated circuit numbers that share this thermostat"
+        }
+      },
+      "zones": {
+        "title": "Channel Names & Thermostat Types",
+        "description": "Give each channel a name and select the type of thermostat installed.\n\n**Detected channels:**\n{thermostats_summary}",
+        "data": {
+          "channel_1_name": "Channel 1 — Name",
+          "channel_1_type": "Channel 1 — Thermostat type",
+          "channel_2_name": "Channel 2 — Name",
+          "channel_2_type": "Channel 2 — Thermostat type",
+          "channel_3_name": "Channel 3 — Name",
+          "channel_3_type": "Channel 3 — Thermostat type",
+          "channel_4_name": "Channel 4 — Name",
+          "channel_4_type": "Channel 4 — Thermostat type",
+          "channel_5_name": "Channel 5 — Name",
+          "channel_5_type": "Channel 5 — Thermostat type",
+          "channel_6_name": "Channel 6 — Name",
+          "channel_6_type": "Channel 6 — Thermostat type",
+          "channel_7_name": "Channel 7 — Name",
+          "channel_7_type": "Channel 7 — Thermostat type",
+          "channel_8_name": "Channel 8 — Name",
+          "channel_8_type": "Channel 8 — Thermostat type",
+          "channel_9_name": "Channel 9 — Name",
+          "channel_9_type": "Channel 9 — Thermostat type",
+          "channel_10_name": "Channel 10 — Name",
+          "channel_10_type": "Channel 10 — Thermostat type",
+          "channel_11_name": "Channel 11 — Name",
+          "channel_11_type": "Channel 11 — Thermostat type",
+          "channel_12_name": "Channel 12 — Name",
+          "channel_12_type": "Channel 12 — Thermostat type",
+          "channel_13_name": "Channel 13 — Name",
+          "channel_13_type": "Channel 13 — Thermostat type",
+          "channel_14_name": "Channel 14 — Name",
+          "channel_14_type": "Channel 14 — Thermostat type",
+          "channel_15_name": "Channel 15 — Name",
+          "channel_15_type": "Channel 15 — Thermostat type",
+          "channel_16_name": "Channel 16 — Name",
+          "channel_16_type": "Channel 16 — Thermostat type"
+        }
+      }
+    },
+    "error": {
+      "thermostat_count_mismatch": "The scan found a different number of thermostats than expected. Wait a moment for all thermostats to communicate and try again.",
+      "empty_group": "Each thermostat must have at least one circuit.",
+      "invalid_format": "Enter circuit numbers separated by commas, e.g. 1, 2, 3.",
+      "channel_out_of_range": "Circuit numbers must be between 1 and 16.",
+      "duplicate_channel": "This circuit is already assigned to another thermostat."
+    }
+  }
+}

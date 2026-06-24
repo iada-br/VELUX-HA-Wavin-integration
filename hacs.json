@@ -1,0 +1,7 @@
+{
+  "name": "VELUX Wavin Integration",
+  "content_in_root": false,
+  "render_readme": true,
+  "domains": ["climate", "sensor", "binary_sensor", "number", "switch"],
+  "homeassistant": "2024.1.0"
+}

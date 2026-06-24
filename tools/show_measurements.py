@@ -1,0 +1,408 @@
+#!/usr/bin/env python3
+"""
+Live measurement display for the Wavin AHC 9000.
+
+Usage:
+    python tools/show_measurements.py              # single snapshot
+    python tools/show_measurements.py --watch      # refresh every 5 s
+    python tools/show_measurements.py --host <ip> --port <port>
+"""
+import argparse
+import os
+import socket
+import struct
+import sys
+import time
+from pathlib import Path
+from typing import Optional
+
+
+# Allow importing sibling tool without installing a package.
+sys.path.insert(0, str(Path(__file__).parent))
+from discover_pusr import detect_subnet, scan_subnet, verify_modbus  # noqa: E402
+
+# ── Connection defaults (match integration defaults) ──────────────────────────
+DEFAULT_HOST  = "192.168.1.199"
+DEFAULT_PORT  = 8899
+DEFAULT_SLAVE = 0x01
+MAX_CHANNELS  = 16
+
+# ── Protocol constants ────────────────────────────────────────────────────────
+FC_READ               = 0x43
+FC_WRITE              = 0x44
+CAT_ELEMENTS          = 0x01
+CAT_PACKED            = 0x02
+CAT_CHANNELS          = 0x03
+CAT_INFO              = 0x07
+IDX_CH_PRIMARY_ELEMENT = 0x02
+IDX_CH_TIMER_EVENT    = 0x00
+IDX_CH_MANUAL_TEMP    = 0x00
+IDX_ELEM_AIR_TEMP     = 0x04
+IDX_ELEM_FLOOR_TEMP   = 0x05
+IDX_INFO_DEVICE_NAME  = 0x04
+IDX_INFO_HW_VER       = 0x02
+IDX_INFO_SW_VER       = 0x03
+PRIMARY_ELEMENT_IDX_MASK     = 0x003F
+PRIMARY_ELEMENT_TP_LOST_MASK = 0x0400
+TIMER_EVENT_OUTP_ON_MASK     = 0x0010
+SENSOR_NA = 0x7FFF
+
+
+# ── USR gateway discovery ─────────────────────────────────────────────────────
+
+def discover_usr(port: int = DEFAULT_PORT) -> Optional[str]:
+    """Scan the local subnet for a Wavin gateway on `port`.
+
+    Uses discover_pusr for WSL2-aware subnet detection and Modbus verification.
+    Returns the first confirmed gateway IP, or None.
+    """
+    try:
+        subnet = detect_subnet()
+    except RuntimeError:
+        return None
+    candidates = scan_subnet(subnet, port)
+    for ip in candidates:
+        if verify_modbus(ip, port):
+            return ip
+    return candidates[0] if candidates else None
+
+
+# ── Minimal Modbus RTU-over-TCP client ───────────────────────────────────────
+# The USR gateway is in Transparent mode, so we send raw Modbus RTU frames
+# (with CRC) instead of Modbus TCP (MBAP) frames.
+
+def _crc16(data: bytes) -> bytes:
+    crc = 0xFFFF
+    for b in data:
+        crc ^= b
+        for _ in range(8):
+            crc = (crc >> 1) ^ 0xA001 if crc & 1 else crc >> 1
+    return struct.pack("<H", crc)
+
+
+class Client:
+    def __init__(self, host: str, port: int, slave: int) -> None:
+        self.host  = host
+        self.port  = port
+        self.slave = slave
+        self._sock: Optional[socket.socket] = None
+
+    def connect(self) -> None:
+        self._sock = socket.create_connection((self.host, self.port), timeout=5.0)
+        self._sock.settimeout(5.0)
+
+    def close(self) -> None:
+        if self._sock:
+            try:
+                self._sock.close()
+            except OSError:
+                pass
+            self._sock = None
+
+    def _send_read(self, cat: int, idx: int, page: int, qty: int, debug: bool = False) -> Optional[list[int]]:
+        pdu = bytes([self.slave, FC_READ, cat, idx, page, qty])
+        frame = pdu + _crc16(pdu)
+        self._sock.sendall(frame)
+        if debug:
+            print(f"  TX cat=0x{cat:02x} idx=0x{idx:02x} page={page} qty={qty}  [{frame.hex()}]")
+
+        expected = 3 + qty * 2 + 2  # slave + FC + byte_count + data + CRC
+        raw = b""
+        deadline = time.monotonic() + 1.5
+        self._sock.settimeout(0.3)
+        while time.monotonic() < deadline:
+            try:
+                chunk = self._sock.recv(512)
+                if not chunk:
+                    return None
+                raw += chunk
+                if len(raw) >= expected:
+                    break
+            except socket.timeout:
+                pass
+
+        if debug:
+            print(f"  RX ({len(raw)} bytes): [{raw.hex()}]")
+
+        if len(raw) < 5:
+            return None
+        bc = raw[2]
+        if len(raw) < 3 + bc + 2:
+            return None
+
+        # Verify response CRC — discard frames with bit errors or stale data.
+        body = raw[:3 + bc]
+        if _crc16(body) != raw[3 + bc: 3 + bc + 2]:
+            if debug:
+                print(f"  CRC mismatch — frame discarded")
+            return None
+
+        n = bc // 2
+        # Slice exactly n*2 bytes so struct.unpack is always given the right size
+        # even when bc is odd (device padding) or mismatched.
+        payload = raw[3: 3 + n * 2]
+        if len(payload) < n * 2:
+            return None
+        return list(struct.unpack(f">{n}H", payload))
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def raw_to_temp(raw: int) -> Optional[float]:
+    if raw == SENSOR_NA:
+        return None
+    signed = raw if raw < 0x8000 else raw - 0x10000
+    temp = round(signed / 10.0, 1)
+    # Discard physically implausible values — these come from reading element
+    # registers on pages that don't correspond to a real thermostat (element
+    # indices are reassigned per TCP session and some channels return garbage).
+    if not (-15.0 <= temp <= 80.0):
+        return None
+    return temp
+
+
+def temp_str(val: Optional[float]) -> str:
+    return f"{val:5.1f} C " if val is not None else "  N/A  "
+
+
+def read_measurements(c: Client, debug: bool = False) -> dict:
+    """Return a dict with device info and per-channel readings."""
+    result: dict = {"channels": []}
+
+    # Device info
+    hw  = c._send_read(CAT_INFO, IDX_INFO_HW_VER,      page=0, qty=1, debug=debug)
+    sw  = c._send_read(CAT_INFO, IDX_INFO_SW_VER,      page=0, qty=1, debug=debug)
+    dev = c._send_read(CAT_INFO, IDX_INFO_DEVICE_NAME, page=0, qty=1, debug=debug)
+    result["hw_ver"]  = hw[0]  if hw  else None
+    result["sw_ver"]  = sw[0]  if sw  else None
+    result["dev_name"] = dev[0] if dev else None
+
+    seen_elements: set[int] = set()
+    element_temps: dict[int, tuple[Optional[float], Optional[float]]] = {}
+
+    for ch in range(MAX_CHANNELS):
+        prim = c._send_read(CAT_CHANNELS, IDX_CH_PRIMARY_ELEMENT, page=ch, qty=1, debug=debug)
+        if prim is None:
+            continue
+        element_idx = prim[0] & PRIMARY_ELEMENT_IDX_MASK
+        tp_lost     = bool(prim[0] & PRIMARY_ELEMENT_TP_LOST_MASK)
+
+        if element_idx == 0:
+            continue  # no thermostat on this channel
+
+        timer = c._send_read(CAT_CHANNELS, IDX_CH_TIMER_EVENT, page=ch, qty=1, debug=debug)
+        valve = bool(timer[0] & TIMER_EVENT_OUTP_ON_MASK) if timer else False
+
+        setp = c._send_read(CAT_PACKED, IDX_CH_MANUAL_TEMP, page=ch, qty=1, debug=debug)
+        desired = raw_to_temp(setp[0]) if setp else None
+
+        # Read temp only once per unique element_idx (shared thermostat)
+        if element_idx not in seen_elements:
+            temps = c._send_read(CAT_ELEMENTS, IDX_ELEM_AIR_TEMP, page=element_idx - 1, qty=2, debug=debug)
+            air   = raw_to_temp(temps[0]) if temps else None
+            floor = raw_to_temp(temps[1]) if (temps and len(temps) > 1) else None
+            element_temps[element_idx] = (air, floor)
+            seen_elements.add(element_idx)
+        else:
+            air, floor = element_temps[element_idx]
+
+        result["channels"].append({
+            "ch":      ch,
+            "element": element_idx,
+            "shared":  element_idx in seen_elements and any(
+                z["element"] == element_idx for z in result["channels"]
+            ),
+            "air":     air,
+            "floor":   floor,
+            "desired": desired,
+            "valve":   valve,
+            "tp_lost": tp_lost,
+        })
+
+    return result
+
+
+def read_averaged(c: Client, samples: int = 4, debug: bool = False) -> dict:
+    """Take `samples` consecutive readings and average temperatures per channel.
+
+    - Temperatures (air, floor, desired): mean of all non-None values.
+    - Valve / tp_lost: taken from the most recent sample.
+    - Element index, shared flag: constant across samples.
+    """
+    all_data: list[dict] = []
+    for i in range(samples):
+        data = read_measurements(c, debug=debug)
+        all_data.append(data)
+        if i < samples - 1:
+            time.sleep(0.3)  # brief gap so the device can respond cleanly
+
+    if not all_data:
+        return {"channels": [], "samples": 0}
+
+    # Collect readings per channel across all samples.
+    # Element indices are reassigned each TCP session so they should be stable
+    # within a single run, but filter out any sample where the index drifted.
+    by_ch: dict[int, list[dict]] = {}
+    for snap in all_data:
+        for z in snap.get("channels", []):
+            by_ch.setdefault(z["ch"], []).append(z)
+
+    def _avg(readings: list[dict], key: str) -> Optional[float]:
+        # Only include readings within a physically plausible range.
+        # Values outside this window are corrupt frames or sensor faults.
+        TEMP_MIN, TEMP_MAX = -20.0, 80.0
+        vals = [
+            r[key] for r in readings
+            if r.get(key) is not None and TEMP_MIN <= r[key] <= TEMP_MAX
+        ]
+        return round(sum(vals) / len(vals), 1) if vals else None
+
+    merged_channels = []
+    for ch, readings in sorted(by_ch.items()):
+        # Only average samples that share the majority element_idx for this channel.
+        # If the index shifted mid-session, discard the outlier samples.
+        from collections import Counter
+        dominant_elem = Counter(r["element"] for r in readings).most_common(1)[0][0]
+        stable = [r for r in readings if r["element"] == dominant_elem]
+        last = stable[-1]
+        merged_channels.append({
+            "ch":      ch,
+            "element": dominant_elem,
+            "shared":  last.get("shared", False),
+            "air":     _avg(stable, "air"),
+            "floor":   _avg(stable, "floor"),
+            "desired": _avg(stable, "desired"),
+            "valve":   last["valve"],
+            "tp_lost": last["tp_lost"],
+            "n":       len(stable),
+        })
+
+    last_snap = all_data[-1]
+    return {
+        "hw_ver":      last_snap.get("hw_ver"),
+        "sw_ver":      last_snap.get("sw_ver"),
+        "dev_name":    last_snap.get("dev_name"),
+        "channels":    merged_channels,
+        "thermostats": _group_by_thermostat(merged_channels),
+        "samples":     samples,
+    }
+
+
+def _format_circuits(chs: list) -> str:
+    """Return a compact 1-indexed circuit list: consecutive runs as 'a-b'."""
+    ns = sorted(c + 1 for c in chs)
+    if len(ns) == 1:
+        return str(ns[0])
+    # Check if all numbers form a single consecutive range.
+    if ns == list(range(ns[0], ns[-1] + 1)):
+        return f"{ns[0]}-{ns[-1]}"
+    return ", ".join(str(n) for n in ns)
+
+
+def _group_by_thermostat(channels: list) -> list:
+    """Aggregate per-circuit data into one entry per physical thermostat group."""
+    by_elem: dict[int, list] = {}
+    for z in channels:
+        by_elem.setdefault(z["element"], []).append(z)
+
+    result = []
+    for elem_idx, chs in sorted(by_elem.items()):
+        primary = min(z["ch"] for z in chs)
+        primary_data = next(z for z in chs if z["ch"] == primary)
+        result.append({
+            "element":    elem_idx,
+            "primary_ch": primary,
+            "channels":   sorted(z["ch"] for z in chs),
+            "air":        primary_data["air"],
+            "floor":      primary_data["floor"],
+            "desired":    primary_data["desired"],
+            "valve":      any(z["valve"]   for z in chs),
+            "tp_lost":    any(z["tp_lost"] for z in chs),
+        })
+    return result
+
+
+def print_table(data: dict, host: str, port: int) -> None:
+    os.system("cls" if os.name == "nt" else "clear")
+
+    hw  = data.get("hw_ver")
+    sw  = data.get("sw_ver")
+    dev = data.get("dev_name")
+    print(f"Wavin AHC 9000  [{host}:{port}]"
+          f"  device={dev}  hw={hw}  sw={sw}")
+
+    SEP = "-" * 83
+    print(SEP)
+    print(f"  {'Channel':<13} {'Circuits':<12}  {'Air':>8}  {'Floor':>8}  {'Setpoint':>9}  {'Valve':>6}  {'TP'}")
+    print(SEP)
+
+    thermostats = data.get("thermostats") or _group_by_thermostat(data.get("channels", []))
+    total_circuits = sum(len(t["channels"]) for t in thermostats)
+
+    if not thermostats:
+        print("  No active thermostats detected.")
+    else:
+        for t in thermostats:
+            label      = f"Channel {t['primary_ch'] + 1}"
+            circuits   = _format_circuits(t["channels"])
+            valve_icon = "OPEN  " if t["valve"]   else "closed"
+            tp_icon    = "LOST" if t["tp_lost"] else "OK"
+            print(
+                f"  {label:<13} {circuits:<12}  "
+                f"{temp_str(t['air'])}  "
+                f"{temp_str(t['floor'])}  "
+                f"{temp_str(t['desired'])}  "
+                f"{valve_icon}  "
+                f"{tp_icon}"
+            )
+
+    samples = data.get("samples", 1)
+    print(SEP)
+    print(f"  Last update: {time.strftime('%H:%M:%S')}   "
+          f"Thermostats: {len(thermostats)}   "
+          f"Total circuits: {total_circuits}/{MAX_CHANNELS}   "
+          f"Averaged over: {samples} sample(s)")
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Wavin AHC 9000 live measurements")
+    parser.add_argument("--host",     default=DEFAULT_HOST,  help="Gateway IP")
+    parser.add_argument("--port",     default=DEFAULT_PORT,  type=int, help="TCP port")
+    parser.add_argument("--slave",    default=DEFAULT_SLAVE, type=int, help="Modbus slave ID")
+    parser.add_argument("--watch",    action="store_true",   help="Refresh every N s (Ctrl+C to stop)")
+    parser.add_argument("--interval", default=5,             type=int, help="Watch interval in seconds")
+    parser.add_argument("--debug",    action="store_true",   help="Print raw TX/RX bytes for every register read")
+    parser.add_argument("--samples",  default=8, type=int,  help="Number of readings to average (default: 8)")
+    args = parser.parse_args()
+
+    host = args.host
+    while True:
+        c = Client(host, args.port, args.slave)
+        try:
+            c.connect()
+            data = read_averaged(c, samples=args.samples, debug=args.debug)
+            print_table(data, host, args.port)
+        except (OSError, socket.timeout) as e:
+            print(f"Connection error ({host}:{args.port}): {e}")
+            found = discover_usr(port=args.port)
+            if found:
+                print(f"[✓] Gateway found: {found}")
+                host = found
+            else:
+                print("[!] No gateway found on local network.")
+        finally:
+            c.close()
+
+        if not args.watch:
+            break
+        try:
+            time.sleep(args.interval)
+        except KeyboardInterrupt:
+            print("\nStopped.")
+            break
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,10 @@
+{
+  "domain": "wavin_ahc9000",
+  "name": "VELUX Wavin Integration",
+  "version": "1.0.0",
+  "codeowners": ["@iada-br"],
+  "config_flow": true,
+  "documentation": "https://github.com/iada-br/VELUX-HA-Wavin-integration",
+  "iot_class": "local_polling",
+  "requirements": []
+}
